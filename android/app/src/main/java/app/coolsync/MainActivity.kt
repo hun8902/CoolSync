@@ -251,6 +251,11 @@ class MainActivity:Activity() {
                 val alerts=group(appSettings,"알림 공유")
                 toggleRow(alerts,"Mac에 휴대폰 알림 표시",prefs.getBoolean("forwardNotifications",false)){enabled->prefs.edit().putBoolean("forwardNotifications",enabled).apply();if(enabled&&!notificationAccess())notificationSettings()}
                 row(alerts,"알림 접근 권한",if(notificationAccess())"허용됨"else"설정 필요",action={notificationSettings()})
+                row(alerts,"Mac으로 테스트 알림 보내기","›",action={
+                    val sync=SyncService.active
+                    if(sync?.authenticated!=true)toast("Mac에 연결한 뒤 테스트해 주세요")
+                    else{val message=org.json.JSONObject().put("app","CoolSync").put("title","푸시 알림 테스트").put("body","휴대폰에서 보낸 테스트 알림입니다.");sync.sendControl("phoneNotification",message.toString());toast("테스트 알림 전송을 요청했습니다")}
+                })
                 alerts.addView(label("휴대폰이 잠겨 있으면 내용을 보내지 않습니다. Mac에서도 알림 권한을 허용하세요.",12f,secondary).apply{setPadding(0,dp(8),0,dp(12))})
                 val unlink=group(deviceSettings,"등록된 Mac")
                 row(unlink,"다른 Mac 연결","›",action={manualKey()})
