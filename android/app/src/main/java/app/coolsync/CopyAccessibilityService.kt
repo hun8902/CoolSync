@@ -15,8 +15,8 @@ class CopyAccessibilityService : AccessibilityService() {
     private var toolbarSeenAt = 0L
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        val sync = SyncService.active ?: return
-        if(!sync.authenticated || sync.locked() || CaptureActivity.inFlight) return
+        val sync = SyncService.active
+        if((sync?.authenticated != true && !ClipHistory.enabled(this)) || getSystemService(android.app.KeyguardManager::class.java).isDeviceLocked || CaptureActivity.inFlight) return
         if(event.packageName?.toString() == packageName) return
         val now = SystemClock.elapsedRealtime()
         val labels = event.text.map { it.toString().trim().lowercase() } + listOfNotNull(event.contentDescription?.toString()?.trim()?.lowercase())
@@ -38,7 +38,7 @@ class CopyAccessibilityService : AccessibilityService() {
         scheduled?.let(handler::removeCallbacks)
         val expectedAt = System.currentTimeMillis()
         scheduled = Runnable {
-            if(SyncService.active?.authenticated != true || sync.locked()) return@Runnable
+            if(getSystemService(android.app.KeyguardManager::class.java).isDeviceLocked) return@Runnable
             try {
                 startActivity(Intent(this,CaptureActivity::class.java).putExtra("eventTime",expectedAt).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS))
             } catch (_: Exception) { /* OEM may block the focus acquisition. Never loop. */ }

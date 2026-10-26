@@ -24,6 +24,7 @@ final class PhotoThumbnails {
     private var reported=false
     private let cache=NSCache<NSString,NSImage>()
     private var endpoint:[String:Any]?
+    private var failedHosts=Set<String>()
     private var preparing=false
     private var pending:[()->Void]=[]
     private var queue:[(PhotoItem,(NSImage?)->Void)]=[]
@@ -32,7 +33,7 @@ final class PhotoThumbnails {
     private var generation=0
     private let session:URLSession={let c=URLSessionConfiguration.ephemeral;c.timeoutIntervalForRequest=15;c.timeoutIntervalForResource=20;c.httpMaximumConnectionsPerHost=2;return URLSession(configuration:c)}()
     init(){cache.countLimit=200;cache.totalCostLimit=48*1024*1024}
-    func close(){generation+=1;endpoint=nil;queue=[];pending=[];waiting=[:];preparing=false;active=0;reported=false;session.getAllTasks{tasks in tasks.forEach{$0.cancel()}};if rpc?.connected?()==true{rpc?.call("mediaClose"){_ in}}}
+    func close(){generation+=1;endpoint=nil;failedHosts=[];queue=[];pending=[];waiting=[:];preparing=false;active=0;reported=false;session.getAllTasks{tasks in tasks.forEach{$0.cancel()}};if rpc?.connected?()==true{rpc?.call("mediaClose"){_ in}}}
     func clear(){cache.removeAllObjects()}
     private func prepare(_ done:@escaping()->Void){if endpoint != nil{done();return};pending.append(done);if preparing{return};preparing=true;let epoch=generation
         rpc?.call("mediaSession"){[weak self]r in guard let self,self.generation==epoch else{return};self.preparing=false;self.endpoint=r["endpoint"]as?[String:Any];if self.endpoint==nil{self.queue=[];self.report(r["error"]as?String ?? "같은 Wi-Fi와 로컬 네트워크 권한을 확인하세요")};let waiting=self.pending;self.pending=[];for callback in waiting{callback()}}
@@ -41,14 +42,14 @@ final class PhotoThumbnails {
 
     private func pump(){while active<2 && !queue.isEmpty{let request=queue.removeFirst();active+=1;let epoch=generation;prepare{[weak self]in guard let self else{return};if self.generation != epoch{return};self.fetch(request.0,retry:true,epoch:epoch){image in guard epoch==self.generation else{return};self.active=max(0,self.active-1);request.1(image);self.pump()}}}}
     private func fetch(_ item:PhotoItem,retry:Bool,epoch:Int,completion:@escaping(NSImage?)->Void){
-        guard let endpoint,let hosts=endpoint["hosts"]as?[String],let host=hosts.first(where:Self.local),let port=endpoint["port"]as?Int,(1...65535).contains(port),let token=endpoint["token"]as?String,let key=key?(),key.count==32,let url=URL(string:"http://\(host):\(port)/thumbnail")else{completion(nil);return}
+        guard let endpoint,let hosts=endpoint["hosts"]as?[String],let host=hosts.first(where:{Self.local($0) && !failedHosts.contains($0)}),let port=endpoint["port"]as?Int,(1...65535).contains(port),let token=endpoint["token"]as?String,let key=key?(),key.count==32,let url=URL(string:"http://\(host):\(port)/thumbnail")else{completion(nil);return}
         var m=Wire.Message(type:"mediaThumb");m.text=String(data:(try? JSONSerialization.data(withJSONObject:["path":item.path,"token":token])) ?? Data(),encoding:.utf8) ?? ""
         guard let payload=try? Wire.seal(m,key:key)else{completion(nil);return};let id=m.id
         var q=URLRequest(url:url);q.httpMethod="POST";q.httpBody=payload;q.setValue("application/octet-stream",forHTTPHeaderField:"Content-Type")
         session.dataTask(with:q){[weak self]data,response,error in
             var image:NSImage?
             if error==nil,(response as?HTTPURLResponse)?.statusCode==200,let data,data.count<=128128,let box=try? AES.GCM.SealedBox(combined:data),let clear=try? AES.GCM.open(box,using:SymmetricKey(data:key),authenticating:Data("CoolSync/media/1|\(id)".utf8)){image=NSImage(data:clear)}
-            DispatchQueue.main.async{guard let self,self.generation==epoch else{return};if let image{self.cache.setObject(image,forKey:"\(item.path)#\(item.modified)"as NSString,cost:240*240*4);completion(image)}else if retry{self.endpoint=nil;self.prepare{self.fetch(item,retry:false,epoch:epoch,completion:completion)}}else{self.queue=[];self.report("썸네일을 가져오지 못했습니다. 같은 Wi-Fi에 연결하고 두 기기의 로컬 네트워크 접근을 허용하세요.");completion(nil)}}
+            DispatchQueue.main.async{guard let self,self.generation==epoch else{return};if let image{self.cache.setObject(image,forKey:"\(item.path)#\(item.modified)"as NSString,cost:240*240*4);completion(image)}else if hosts.contains(where:{Self.local($0) && $0 != host && !self.failedHosts.contains($0)}){self.failedHosts.insert(host);self.fetch(item,retry:retry,epoch:epoch,completion:completion)}else if retry{self.endpoint=nil;self.failedHosts=[];self.prepare{self.fetch(item,retry:false,epoch:epoch,completion:completion)}}else{self.queue=[];self.report("썸네일을 가져오지 못했습니다. 같은 Wi-Fi에 연결하고 두 기기의 로컬 네트워크 접근을 허용하세요.");completion(nil)}}
         }.resume()
     }
     private func report(_ message:String){if !reported{reported=true;failure?(message)}}

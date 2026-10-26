@@ -35,6 +35,11 @@ final class DashboardModel: ObservableObject {
                 if value.authenticated { self.pairing=false; if !wasConnected { self.tab=1; self.explorer.reload() } }
             }
             photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.error=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
+            value.phoneNotification={ app,title,body in
+                guard UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true else { return }
+                let content=UNMutableNotificationContent();content.title=app;content.subtitle=title;content.body=body
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil))
+            }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
             value.filesystemMessage={ [weak self] message in self?.explorer.handle(message) }
             explorer.files=files; explorer.connected={ [weak value] in value?.authenticated ?? false }; explorer.send={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
@@ -133,8 +138,8 @@ struct CoolDashboard:View {
             Section("파일 탐색"){Text("휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용해야 합니다.");Text("파일과 폴더는 내부 저장소에서 관리합니다. 다른 앱의 전용 데이터와 시스템 보호 폴더는 접근할 수 없습니다.").foregroundStyle(.secondary)}
             Section("클립보드"){Toggle("복사 기록 저장",isOn:Binding(get:{model.history.enabled},set:{model.history.enabled=$0}));Text("이 기기에 최대 200개를 저장합니다. 민감한 내용 표시는 존중합니다. 이미지 한 장은 같은 로컬 네트워크에서 공유합니다.").foregroundStyle(.secondary)}
             Section("앱 업데이트"){Button("업데이트 확인…"){MacUpdates.shared.check()};Text("새 업데이트를 자동 확인합니다. 다운로드 및 설치 방식은 업데이트 창에서 변경할 수 있습니다.").foregroundStyle(.secondary)}
-            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");LabeledContent("다른 앱 푸시 전달",value:"미지원");Button("파일 수신 알림 허용"){UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]){_,_ in}}}
-            Section{Text("CoolSync 0.3.0").foregroundStyle(.secondary)}
+            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);Button("파일 수신 알림 허용"){UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]){_,_ in}}}
+            Section{Text("CoolSync 0.3.0 · 빌드 " + (Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "—")).foregroundStyle(.secondary)}
         }.formStyle(.grouped).frame(maxWidth:.infinity)
     }
     private func detail(_ title:String,_ value:String)->some View{HStack(alignment:.firstTextBaseline){Text(title).foregroundStyle(.secondary).frame(width:100,alignment:.leading);Text(value).textSelection(.enabled);Spacer()}.font(.system(size:13))}

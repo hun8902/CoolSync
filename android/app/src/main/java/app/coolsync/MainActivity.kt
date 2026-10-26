@@ -20,6 +20,9 @@ class MainActivity:Activity() {
     private var animateTab=false
     private var historyFilter=false
     private var selectedTab=0
+    private var renderedTab=0
+    private var activeScroll:ScrollView?=null
+    private val scrollOffsets=IntArray(4)
     private var pairingDialog:Dialog?=null
     private var connectionDetail:TextView?=null
     private var connectionBadge:TextView?=null
@@ -56,6 +59,8 @@ class MainActivity:Activity() {
     private fun nearby()=checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE)==PackageManager.PERMISSION_GRANTED
     private fun accessibility()=Settings.Secure.getString(contentResolver,Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)?.contains("$packageName/",true)==true
     private fun notifications()=Build.VERSION.SDK_INT<33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
+    private fun notificationAccess()=Settings.Secure.getString(contentResolver,"enabled_notification_listeners")?.split(':')?.any{ComponentName.unflattenFromString(it)?.packageName==packageName}==true
+    private fun notificationSettings(){startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))}
     private fun storage()=Environment.isExternalStorageManager()
     private fun consume(value:Intent){
         val uri=value.data
@@ -111,6 +116,7 @@ class MainActivity:Activity() {
         permissionRow(body,"파일 관리","Mac에서 내부 저장소 탐색·편집",storage()){special(2)}
         permissionRow(body,"사진 촬영 위치","사진첩에서 촬영 장소 표시 · 선택 사항",checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION)==PackageManager.PERMISSION_GRANTED){requestMediaLocation()}
         permissionRow(body,"알림","연결 상태 표시 · 선택 사항",notifications()){requestRuntime()}
+        permissionRow(body,"Mac으로 알림 공유","다른 앱의 알림 전달 · 선택 사항",notificationAccess()){notificationSettings()}
         space(body,14);body.addView(label("파일 관리 권한도 앱 전용 데이터나 시스템 보호 폴더를 열 수 있게 하지는 않습니다.",12f,secondary))
         wizardContinue?.text=if(nearby()&&accessibility()&&storage())"완료"else "설정 계속"
     }
@@ -162,14 +168,16 @@ class MainActivity:Activity() {
         autoConnect=true;stopService(Intent(this,SyncService::class.java));prefs.edit().remove("connectionIssue").apply();begin(true);render()
     }
     private fun render(){
+        activeScroll?.let{scrollOffsets[renderedTab]=it.scrollY}
+        renderedTab=selectedTab
         values.clear();details.clear();connectionDetail=null;connectionBadge=null
         val dark=resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK==Configuration.UI_MODE_NIGHT_YES
         ink=if(dark)0xfff4f4f6.toInt()else 0xff1c1c1e.toInt();secondary=if(dark)0xffa0a0a6.toInt()else 0xff707078.toInt();paper=if(dark)0xff1c1c1e.toInt()else Color.WHITE
         val root=FrameLayout(this);root.setBackgroundColor(if(dark)0xff101114.toInt()else 0xfff2f2f7.toInt())
         root.setOnApplyWindowInsetsListener{view,insets->val bars=insets.getInsets(WindowInsets.Type.systemBars());view.setPadding(bars.left,bars.top,bars.right,bars.bottom);insets}
-        val scroll=ScrollView(this);scroll.clipToPadding=true;scroll.setPadding(0,0,0,dp(94));root.addView(scroll,FrameLayout.LayoutParams(-1,-1))
-        val frame=FrameLayout(this);scroll.addView(frame)
         val wide=resources.configuration.screenWidthDp>=720
+        val scroll=ScrollView(this);scroll.clipToPadding=true;scroll.setPadding(0,0,0,dp(if(wide)16 else 94));root.addView(scroll,FrameLayout.LayoutParams(-1,-1).apply{if(wide)leftMargin=dp(96)})
+        val frame=FrameLayout(this);scroll.addView(frame)
         val body=column();body.setPadding(dp(20),dp(16),dp(20),dp(12));frame.addView(body,FrameLayout.LayoutParams(-1,-2))
         val titles=listOf("연결","클립보드","파일","설정")
         body.addView(label(titles[selectedTab],30f,ink,true));space(body,16)
@@ -230,23 +238,29 @@ class MainActivity:Activity() {
                 row(g,"권한 관리","›",action={showPermissions()});row(g,"연결 진단","›",action={diagnostics()})
                 toggleRow(g,"재부팅 후 연결 시작",prefs.getBoolean("boot",true)){prefs.edit().putBoolean("boot",it).apply()}
 
+                val alerts=group(body,"알림 공유")
+                toggleRow(alerts,"Mac에 휴대폰 알림 표시",prefs.getBoolean("forwardNotifications",false)){enabled->prefs.edit().putBoolean("forwardNotifications",enabled).apply();if(enabled&&!notificationAccess())notificationSettings()}
+                row(alerts,"알림 접근 권한",if(notificationAccess())"허용됨"else"설정 필요",action={notificationSettings()})
+                alerts.addView(label("휴대폰이 잠겨 있으면 내용을 보내지 않습니다. Mac에서도 알림 권한을 허용하세요.",12f,secondary).apply{setPadding(0,dp(8),0,dp(12))})
                 val unlink=group(body,"등록된 Mac")
                 row(unlink,"다른 Mac 연결","›",action={manualKey()})
                 row(unlink,"등록 해제","›","저장된 연결 정보를 삭제합니다.",action={confirmUnlink()})
                 val updates=group(body,"앱 업데이트")
                 row(updates,"업데이트",AppUpdates.status,action={AppUpdates.update(this)})
+                row(updates,"설치된 빌드",packageManager.getPackageInfo(packageName,0).longVersionCode.toString())
                 toggleRow(updates,"새 업데이트 자동 확인",getSharedPreferences("updates",0).getBoolean("automatic",true)){getSharedPreferences("updates",0).edit().putBoolean("automatic",it).apply()}
 
                 body.addView(label("CoolSync",13f,secondary))
             }
         }
-        val nav=LinearLayout(this).apply{setPadding(dp(6),dp(6),dp(6),dp(6));background=surface();elevation=dp(10).toFloat()}
+        val nav=LinearLayout(this).apply{orientation=if(wide)LinearLayout.VERTICAL else LinearLayout.HORIZONTAL;setPadding(dp(6),dp(6),dp(6),dp(6));background=surface();elevation=dp(10).toFloat()}
         titles.forEachIndexed{i,title->
             val item=column();item.gravity=Gravity.CENTER;item.background=if(i==selectedTab)GradientDrawable(GradientDrawable.Orientation.TL_BR,intArrayOf(0x38007aff,0x18007aff)).apply{cornerRadius=dp(22).toFloat();setStroke(dp(1),0x22007aff)}else null
-            item.addView(LinkIcon(this,i,if(i==selectedTab)blue else secondary),LinearLayout.LayoutParams(dp(23),dp(23)));space(item,4);item.addView(label(title,10f,if(i==selectedTab)blue else secondary,i==selectedTab).apply{gravity=Gravity.CENTER});item.contentDescription=title+" 탭";interactive(item){if(selectedTab!=i){selectedTab=i;animateTab=true;render()}};nav.addView(item,LinearLayout.LayoutParams(0,dp(54),1f).apply{setMargins(dp(2),0,dp(2),0)})
+            item.addView(LinkIcon(this,i,if(i==selectedTab)blue else secondary),LinearLayout.LayoutParams(dp(23),dp(23)));space(item,4);item.addView(label(title,10f,if(i==selectedTab)blue else secondary,i==selectedTab).apply{gravity=Gravity.CENTER});item.contentDescription=title+" 탭";interactive(item){if(selectedTab!=i){selectedTab=i;animateTab=true;render()}};nav.addView(item,(if(wide)LinearLayout.LayoutParams(-1,dp(68))else LinearLayout.LayoutParams(0,dp(54),1f)).apply{setMargins(dp(2),dp(2),dp(2),dp(2))})
         }
-        root.addView(nav,FrameLayout.LayoutParams(dp((resources.configuration.screenWidthDp-32).coerceAtMost(520)),-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{bottomMargin=dp(12)})
+        root.addView(nav,FrameLayout.LayoutParams(dp(if(wide)76 else (resources.configuration.screenWidthDp-32).coerceAtMost(520)),-2,if(wide)Gravity.START or Gravity.CENTER_VERTICAL else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{if(wide)leftMargin=dp(12)else bottomMargin=dp(12)})
         if(animateTab&&android.animation.ValueAnimator.areAnimatorsEnabled()){scroll.alpha=0f;scroll.translationY=dp(12).toFloat();scroll.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(android.view.animation.DecelerateInterpolator()).start()};animateTab=false
+        activeScroll=scroll;scroll.post{scroll.scrollTo(0,scrollOffsets[selectedTab])}
         setContentView(root);root.requestApplyInsets()
         window.insetsController?.setSystemBarsAppearance(if(dark)0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
         liveFingerprint=fingerprint()

@@ -10,7 +10,7 @@ class CaptureActivity : Activity() {
     private var read = false
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        if(inFlight || SyncService.active?.authenticated != true) { finish(); return }
+        if(inFlight || (SyncService.active?.authenticated != true && !ClipHistory.enabled(this))) { finish(); return }
         inFlight = true
         window.setLayout(1,1)
         handler.postDelayed({ finish() },1200) // Safety timeout, not a polling timer.
@@ -23,8 +23,8 @@ class CaptureActivity : Activity() {
     }
     private fun capture() {
         try {
-            val sync = SyncService.active ?: return
-            if(sync.locked()) return
+            val sync = SyncService.active
+            if(getSystemService(android.app.KeyguardManager::class.java).isDeviceLocked) return
             val clipboard = getSystemService(ClipboardManager::class.java)
             val desc = clipboard.primaryClipDescription ?: return
             // Reject old clipboard after a false-positive menu dismissal.
@@ -33,8 +33,10 @@ class CaptureActivity : Activity() {
             if(desc.extras?.getBoolean("android.content.extra.IS_SENSITIVE",false) == true) return
             val clip = clipboard.primaryClip ?: return
             if(clip.itemCount > 0){val item=clip.getItemAt(0);val uri=item.uri
-                if(uri!=null && uri.authority!="$packageName.clipboard" && contentResolver.getType(uri)?.startsWith("image/")==true)sync.localImage(uri)
-                else item.text?.toString()?.let { sync.localCopy(it) }
+                if(uri!=null && uri.authority!="$packageName.clipboard" && contentResolver.getType(uri)?.startsWith("image/")==true){
+                    if(sync?.authenticated==true)sync.localImage(uri)
+                    else {val file=ClipHistory.normalized(this,uri);try{ClipHistory.image(this,file,"휴대폰")}finally{file.delete()}}
+                } else item.text?.toString()?.let { if(sync?.authenticated==true)sync.localCopy(it)else ClipHistory.text(this,it,"휴대폰") }
             }
         } catch (_: Exception) { /* No content logging. */ }
         finally { finish() }

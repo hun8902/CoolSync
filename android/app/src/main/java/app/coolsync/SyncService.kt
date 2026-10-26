@@ -22,6 +22,7 @@ class SyncService : Service() {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var peer: BluetoothDevice? = null
     private var subscribed = false
+    private var pendingHello:JSONObject?=null
     private var handshakeStage = "Bluetooth 연결"
     @Volatile var authenticated = false; private set
     private var mtu = 23
@@ -81,6 +82,7 @@ class SyncService : Service() {
             val valid = peer == d && desc.uuid.toString() == Protocol.CCC && !prepared && offset == 0 && value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
             if(valid) { subscribed = true; authProgress("Mac 인증 요청 대기") }
             if(response) server?.sendResponse(d,id,if(valid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null)
+            if(valid)pendingHello?.let{pendingHello=null;handle(it)}
         } }
         override fun onCharacteristicWriteRequest(d: BluetoothDevice, id: Int, characteristic: BluetoothGattCharacteristic, prepared: Boolean, response: Boolean, offset: Int, value: ByteArray) { main.post {
             val valid = peer == d && characteristic.uuid.toString() == Protocol.RX && !prepared && offset == 0 && value.size <= 514
@@ -131,7 +133,8 @@ class SyncService : Service() {
     private fun advertise() {
         if(!prefs.getBoolean("enabled",false) || authenticated) return
         try {
-            advertiser?.startAdvertising(AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER).setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_LOW).setConnectable(true).setTimeout(0).build(),AdvertiseData.Builder().addServiceUuid(ParcelUuid(UUID.fromString(Protocol.SERVICE))).setIncludeDeviceName(false).build(),advert)
+            val identity=java.security.MessageDigest.getInstance("SHA-256").digest(Protocol.key(this) ?: return).copyOf(8)
+            advertiser?.startAdvertising(AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER).setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_LOW).setConnectable(true).setTimeout(0).build(),AdvertiseData.Builder().addServiceUuid(ParcelUuid(UUID.fromString(Protocol.SERVICE))).setIncludeDeviceName(false).build(),AdvertiseData.Builder().addServiceData(ParcelUuid(UUID.fromString(Protocol.SERVICE)),identity).build(),advert)
         } catch (_: Exception) { update("광고를 시작하지 못했습니다") }
     }
     private fun notification(text: String): Notification {
@@ -163,6 +166,7 @@ class SyncService : Service() {
     }
     private fun handle(m: JSONObject) {
         val type = m.getString("type"); val id = m.getString("id")
+        if(type=="hello" && !subscribed){pendingHello=m;return}
         if(type == "hello" && subscribed) {
             authenticated = true; main.removeCallbacks(waitTimeout); main.removeCallbacks(linkTimeout); advertiser?.stopAdvertising(advert)
             peerName = try { JSONObject(m.optString("text")).optString("name","Mac").take(80) } catch (_: Exception) { "Mac" }
@@ -233,7 +237,7 @@ class SyncService : Service() {
     }
     private fun resetPeer() {
         GalleryServer.close()
-        peer = null; authenticated = false; subscribed = false; mtu = 23; pending = null
+        peer = null; authenticated = false; subscribed = false; pendingHello=null; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null
         main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout)
     }

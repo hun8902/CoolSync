@@ -41,7 +41,7 @@ class PairScannerActivity : Activity() {
             override fun barcodeResult(result: BarcodeResult) {
                 if (finishedScan) return
                 val uri = runCatching { Uri.parse(result.text) }.getOrNull()
-                val key = uri?.getQueryParameter("key")
+                val key = if(uri?.scheme=="coolsync" && uri.host=="pair")runCatching{uri.getQueryParameter("key")}.getOrNull()else null
                 if (uri?.scheme != "coolsync" || uri.host != "pair" || key?.matches(Regex("[a-fA-F0-9]{64}")) != true) {
                     message.text = "CoolSync 연결 QR이 아닙니다. Mac의 연결 화면을 확인하세요."
                     return

@@ -63,6 +63,7 @@ enum KeyStore {
 
 final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var changed: ((String)->Void)?
+    var phoneNotification: ((String,String,String)->Void)?
     var fileMessage: ((Wire.Message)->Void)?
     var imageCopied:((URL,Int64)->Void)?
     var filesystemMessage: ((Wire.Message)->Void)?
@@ -148,6 +149,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
     func centralManager(_ central: CBCentralManager,didDiscover peripheral: CBPeripheral,advertisementData: [String:Any],rssi RSSI: NSNumber) {
         guard peer == nil, enabled, !sleeping, disconnecting.isEmpty else { return }
+        if let values=advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID:Data], let identity=values[Wire.service], identity != Data(SHA256.hash(data:key).prefix(8)) { return }
         if let failed = failedCandidates[peripheral.identifier], Date().timeIntervalSince(failed) < 60 { return }
         central.stopScan(); peer = peripheral; peripheral.delegate = self
         central.connect(peripheral,options:nil); status("휴대폰 인증 중")
@@ -246,6 +248,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             status("연결됨 · 복사 대기"); startClipboardMonitor(); return
         }
         guard authenticated else { return }
+        if m.type=="phoneNotification" { if !locked, let data=m.text.data(using:.utf8), let value=try? JSONSerialization.jsonObject(with:data) as? [String:String] { phoneNotification?(String((value["app"] ?? "휴대폰").prefix(100)),String((value["title"] ?? "").prefix(160)),String((value["body"] ?? "").prefix(1200))) }; return }
         if m.type=="fsResponse" { filesystemMessage?(m); return }
         if m.type.hasPrefix("file") { fileMessage?(m); return }
         if m.type == "ack", m.ref == pending?.id {

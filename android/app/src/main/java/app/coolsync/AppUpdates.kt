@@ -33,9 +33,9 @@ object AppUpdates {
     private var continueInstall=false
     private var waitingPermission=false
     fun update(a:Activity){
-        if(busy)return
         updateActivity=java.lang.ref.WeakReference(a)
         continueInstall=true
+        if(busy)return
         when { ready()->install(a); available!=null->download(a); else->check(a) }
     }
     fun resume(a:Activity){
@@ -67,7 +67,7 @@ object AppUpdates {
             require(m.getLong("size") in 1..MAX_APK&&m.getString("sha256").matches(Regex("[a-f0-9]{64}"))){"업데이트 정보 오류"}
             val u=Uri.parse(m.getString("url"));require(u.scheme=="https"&&u.host=="github.com"&&u.path?.startsWith("/hun8902/CoolSync/releases/download/")==true){"업데이트 주소 오류"}
             main.post{available=m.takeIf{it.getLong("build")>localCode(c)};busy=false;status=if(available==null)"최신 상태"else "업데이트 설치";changed?.invoke();advance()}
-        }catch(e:Exception){main.post{busy=false;status=e.message ?: "업데이트 확인 실패";changed?.invoke()}}}
+        }catch(e:Exception){main.post{continueInstall=false;busy=false;status=e.message ?: "업데이트 확인 실패";changed?.invoke()}}}
     }
     fun download(context:Context){
         val m=available ?: return;if(busy)return;busy=true;status="다운로드 중…";changed?.invoke();val c=context.applicationContext
@@ -86,7 +86,7 @@ object AppUpdates {
             require(!actual.isNullOrEmpty()&&actual==current){"APK 서명이 기존 앱과 다릅니다"}
             require(!target.exists()||target.delete());require(tmp.renameTo(target)){"업데이트 파일 저장 실패"}
             main.post{verified=target;busy=false;status="설치 준비됨";changed?.invoke();advance()}
-            }catch(e:Exception){tmp.delete();main.post{verified=null;busy=false;status=e.message ?: "다운로드 실패";changed?.invoke()}}
+            }catch(e:Exception){tmp.delete();main.post{verified=null;continueInstall=false;busy=false;status=e.message ?: "다운로드 실패";changed?.invoke()}}
         }
     }
     fun ready()=verified?.isFile==true
