@@ -20,7 +20,7 @@ class CopyAccessibilityService : AccessibilityService() {
         if(event.packageName?.toString() == packageName) return
         val now = SystemClock.elapsedRealtime()
         val labels = event.text.map { it.toString().trim().lowercase() } + listOfNotNull(event.contentDescription?.toString()?.trim()?.lowercase())
-        val copyLabels = setOf("copy","copy text","복사","텍스트 복사","コピー","复制","複製")
+        val copyLabels = setOf("copy","copy image","copy photo","이미지 복사","사진 복사","copy text","복사","텍스트 복사","コピー","复制","複製")
         val confirmation = labels.any { it.contains("copied") || it.contains("복사됨") || it.contains("복사되었습니다") || it.contains("복사했") || it.contains("클립보드에 복사") || it.contains("コピーしました") || it.contains("已复制") }
         var detected = when(event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> labels.any { it in copyLabels || it.startsWith("copy to ") }

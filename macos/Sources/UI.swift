@@ -18,9 +18,12 @@ final class DashboardModel: ObservableObject {
     @Published var keyHex=""
     let files=FileTransfer()
     let explorer=ExplorerModel()
+    let clipboardState=ClipboardPaneState()
+    let history:ClipHistory
     var engine: SyncEngine?
     var onStatus: ((String)->Void)?
     init(preview: Bool=false) {
+        history=preview ? ClipHistory(folder:FileManager.default.temporaryDirectory.appendingPathComponent("CoolSyncPreview-"+UUID().uuidString),recording:true):ClipHistory.shared
         if preview { keyHex=String(repeating:"0",count:64); return }
         do {
             let key=try KeyStore.load(); keyHex=key.map{String(format:"%02x",$0)}.joined()
@@ -35,6 +38,9 @@ final class DashboardModel: ObservableObject {
             explorer.files=files; explorer.connected={ [weak value] in value?.authenticated ?? false }; explorer.send={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.sendControl={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.key={ [weak value] in value?.key ?? Data() }; files.connected={ [weak value] in value?.authenticated ?? false }
+            value.imageCopied={ [weak self] url,time in self?.files.stage(url,folder:nil,clipboard:true,clipTime:time) }
+            files.canReceiveImage={ [weak value] time in value?.canApplyImage(time) ?? false }
+            files.imageReceived={ [weak value] url,time in value?.applyImage(url,time:time) }
             name=value.peerName; model=value.peerModel; pairing=model.isEmpty
         } catch { status="키체인 접근을 허용한 뒤 다시 실행하세요" }
     }
@@ -48,6 +54,7 @@ final class DashboardModel: ObservableObject {
 
 struct CoolDashboard:View {
     @ObservedObject var model:DashboardModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body:some View{
         HStack(spacing:0){
             VStack(alignment:.leading,spacing:8){
@@ -55,6 +62,7 @@ struct CoolDashboard:View {
                 Button("연결"){model.tab=0}.buttonStyle(.plain).font(.system(size:13,weight:.semibold))
                 Text("기기").font(.system(size:11,weight:.semibold)).foregroundStyle(.secondary)
                 Button{model.tab=0}label:{HStack(alignment:.top,spacing:9){Image(systemName:"iphone");VStack(alignment:.leading,spacing:4){Text(model.name).lineLimit(2);Text(model.connected ? "연결됨":"미연결").font(.system(size:11)).foregroundStyle(model.connected ? .green:.secondary)}}.padding(.vertical,7)}.buttonStyle(.plain)
+                Button{model.tab=3}label:{Label("클립보드",systemImage:"clipboard").frame(maxWidth:.infinity,alignment:.leading).padding(10).background(model.tab==3 ? Color.blue.opacity(0.14):.clear,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain)
                 Divider().padding(.vertical,9)
                 Text("휴대폰 저장소").font(.system(size:11,weight:.semibold)).foregroundStyle(.secondary)
                 location("내부 저장소","internaldrive","")
@@ -65,10 +73,10 @@ struct CoolDashboard:View {
                 Spacer()
                 Text(model.model).font(.system(size:11)).foregroundStyle(.secondary)
                 Button{model.tab=2}label:{Label("설정",systemImage:"gearshape")}.buttonStyle(.plain).padding(.top,12)
-            }.padding(18).frame(width:168).frame(maxHeight:.infinity).background(Color(nsColor:.windowBackgroundColor))
+            }.padding(18).frame(width:168).frame(maxHeight:.infinity).background(.ultraThinMaterial)
             Divider()
-            if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else{settings}
-        }.frame(minWidth:800,minHeight:520)
+            Group{if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
+        }.background(LinearGradient(colors:[Color(red:0.94,green:0.96,blue:1),Color(red:0.98,green:0.96,blue:0.99)],startPoint:.topLeading,endPoint:.bottomTrailing)).animation(reduceMotion ? nil:.easeInOut(duration:0.2),value:model.tab).frame(minWidth:800,minHeight:520)
         .alert("연결 확인",isPresented:$model.showConnectionIssue){Button("다시 연결"){model.engine?.reconnect()};Button("닫기",role:.cancel){}}message:{Text((model.connectionIssue.isEmpty ? model.status:model.connectionIssue)+"\n\n휴대폰에서 CoolSync의 연결을 시작하고 주변 기기 권한을 허용하세요. 두 기기의 Bluetooth를 켜고, 인증이 실패하면 현재 QR을 다시 스캔하세요.")}
     }
     private func location(_ title:String,_ icon:String,_ path:String)->some View{Button{model.tab=1;model.explorer.browse(path)}label:{Label(title,systemImage:icon).frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,7).padding(.horizontal,6).background(model.tab==1 && !model.explorer.trashMode && model.explorer.path==path ? Color.blue.opacity(0.12):.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)}
@@ -92,12 +100,47 @@ struct CoolDashboard:View {
         Form{
             Section("연결"){LabeledContent("휴대폰",value:model.name);LabeledContent("모델",value:model.model);Button("공유 시작 / 중지"){model.engine?.toggle()};Button("다른 휴대폰 연결"){model.reset()};Button("연결 QR 보기"){model.pairing=true;model.tab=0}}
             Section("파일 탐색"){Text("휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용해야 합니다.");Text("파일과 폴더는 내부 저장소에서 관리합니다. 다른 앱의 전용 데이터와 시스템 보호 폴더는 접근할 수 없습니다.").foregroundStyle(.secondary)}
+            Section("클립보드"){Toggle("복사 기록 저장",isOn:Binding(get:{model.history.enabled},set:{model.history.enabled=$0}));Text("이 기기에 최대 200개를 저장합니다. 민감한 내용 표시는 존중합니다. 이미지 한 장은 같은 로컬 네트워크에서 공유합니다.").foregroundStyle(.secondary)}
             Section("앱 업데이트"){Button("업데이트 확인…"){MacUpdates.shared.check()};Text("새 업데이트를 자동 확인합니다. 다운로드 및 설치 방식은 업데이트 창에서 변경할 수 있습니다.").foregroundStyle(.secondary)}
             Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");LabeledContent("다른 앱 푸시 전달",value:"미지원");Button("파일 수신 알림 허용"){UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]){_,_ in}}}
             Section{Text("CoolSync 0.3.0").foregroundStyle(.secondary)}
         }.formStyle(.grouped).frame(maxWidth:.infinity)
     }
     private func detail(_ title:String,_ value:String)->some View{HStack(alignment:.firstTextBaseline){Text(title).foregroundStyle(.secondary).frame(width:100,alignment:.leading);Text(value).textSelection(.enabled);Spacer()}.font(.system(size:13))}
+}
+final class ClipboardPaneState:ObservableObject {
+    @Published var search=""
+    @Published var favorites=false
+    @Published var selection:String?
+    @Published var confirmClear=false
+}
+struct ClipboardPane:View {
+    @ObservedObject var history:ClipHistory
+    @ObservedObject var state:ClipboardPaneState
+    private var filtered:[ClipEntry]{history.entries.filter{(!state.favorites || $0.favorite) && (state.search.isEmpty || ($0.text ?? "이미지").localizedCaseInsensitiveContains(state.search))}}
+    private var selected:ClipEntry?{filtered.first{$0.id==state.selection}}
+    var body:some View{
+        VStack(spacing:0){
+            HStack{Text("클립보드").font(.system(size:23,weight:.semibold));Spacer();Toggle("즐겨찾기",isOn:$state.favorites).toggleStyle(.button);Button{state.confirmClear=true}label:{Image(systemName:"trash")}.help("모든 기록 삭제");TextField("기록 검색",text:$state.search).textFieldStyle(.roundedBorder).frame(width:170)}.padding(22)
+            Divider()
+            HStack(spacing:0){
+                List(filtered,selection:$state.selection){item in
+                    HStack(alignment:.top,spacing:12){Image(systemName:item.image==nil ? "text.alignleft":"photo").foregroundStyle(.blue).frame(width:24);VStack(alignment:.leading,spacing:6){Text(item.text ?? "이미지 한 장").lineLimit(2).font(.system(size:13));Text(item.source+" · "+item.time.formatted(date:.abbreviated,time:.shortened)).font(.system(size:10)).foregroundStyle(.secondary)};Spacer();if item.favorite{Image(systemName:"star.fill").font(.system(size:11)).foregroundStyle(.orange)}}.padding(.vertical,8).tag(item.id)
+                    .contextMenu{Button("다시 복사"){history.copy(item)};Button(item.favorite ? "즐겨찾기 해제":"즐겨찾기"){history.favorite(item.id)};Button("삭제",role:.destructive){history.remove(item.id)}}
+                }.listStyle(.inset).frame(minWidth:220,idealWidth:280,maxWidth:320)
+                Divider()
+                VStack(alignment:.leading,spacing:18){
+                    if let item=selected{
+                        HStack{Text(item.image==nil ? "텍스트":"이미지").font(.headline);Spacer();Button{history.favorite(item.id)}label:{Image(systemName:item.favorite ? "star.fill":"star")}.help("즐겨찾기");Button{history.remove(item.id)}label:{Image(systemName:"trash")}.help("기록 삭제")}
+                        ScrollView{if let text=item.text{Text(text).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}else if let name=item.image,let image=NSImage(contentsOf:history.folder.appendingPathComponent(name)){Image(nsImage:image).resizable().scaledToFit().frame(maxWidth:.infinity)}}
+                        Text(item.source+" · "+item.time.formatted()).font(.caption).foregroundStyle(.secondary)
+                        Button{history.copy(item)}label:{Label("다시 복사",systemImage:"doc.on.doc").frame(maxWidth:.infinity).padding(7)}.buttonStyle(.borderedProminent)
+                    }else{Spacer();Image(systemName:"clipboard").font(.system(size:32,weight:.light)).foregroundStyle(.tertiary).frame(maxWidth:.infinity);Text(filtered.isEmpty ? "새로 복사한 내용이 여기에 표시됩니다":"기록을 선택하세요").foregroundStyle(.secondary).font(.system(size:13)).frame(maxWidth:.infinity);Spacer()}
+                }.padding(24).frame(maxWidth:.infinity,maxHeight:.infinity).background(.thinMaterial)
+            }
+            Divider();HStack{Text("\(filtered.count)개 · 이 기기에만 저장");Spacer();Text("민감한 클립보드는 기록하지 않습니다")}.font(.system(size:11)).foregroundStyle(.secondary).padding(12)
+        }.alert("기록을 모두 삭제할까요?",isPresented:$state.confirmClear){Button("모두 삭제",role:.destructive){history.clear()};Button("취소",role:.cancel){}}message:{Text("이 Mac에 저장된 즐겨찾기와 이미지도 삭제합니다. 휴대폰의 기록에는 영향을 주지 않습니다.")}
+    }
 }
 struct ExplorerPane:View{
     @ObservedObject var model:ExplorerModel

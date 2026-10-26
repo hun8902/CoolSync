@@ -39,3 +39,15 @@ Mac 앱은 개인용 ad-hoc 서명이며 Apple 공증은 받지 않았다. Andro
 - Downloaded the actual release assets and verified Android APK/metadata signatures, Mac package signature, embedded public key/build and Sparkle Ed25519 archive signature. Tampered signature inputs were rejected.
 - A disposable Android emulator running build 4 fetched the real GitHub feed, downloaded the APK, verified it and opened the system installer. Play Protect scan passed; installation advanced to build 1002 and cold launch survived.
 - The user's physical phone and installed Mac app were not replaced. A full Mac in-place Sparkle replacement has not been tested.
+
+
+## Clipboard history, image clipboard and UI revision
+
+- Local history bounds, deduplication, favorites, persistence, disabled recording and image deletion passed on the actual Mac history implementation.
+- Disposable Android emulator: history limit/favorites/dedup passed; copying a synthetic PNG produced an image/png clipboard URI readable through the real content provider. Deleting its history entry did not invalidate the current clipboard image.
+- Actual Mac image-offer receiver and a JCE client: encrypted PNG transfer, automatic image acceptance, hash/image validation and image callback passed.
+- Existing encrypted binary transfer and explorer RPC regression checks passed.
+- Android settings/history were captured and inspected in portrait and landscape. Mac clipboard/settings previews use isolated synthetic data. A short actual Android tab-animation recording is available locally.
+- Android clipboard capture remains event driven; no clipboard polling, WakeLock or ADB requirement was introduced.
+- The translucent surfaces are platform-adapted visuals. Android does not use Apple's native Liquid Glass framework; compositor blur falls back to translucency when unavailable.
+- Physical Galaxy-to-Mac image synchronization and paste into KakaoTalk or other third-party apps have not been verified. Source URI access and destination app image-paste support are required. Image clipboard payloads require the local-network transfer path.

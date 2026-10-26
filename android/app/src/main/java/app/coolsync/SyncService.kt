@@ -186,6 +186,7 @@ class SyncService : Service() {
             val clip = ClipData.newPlainText("CoolSync",text)
             clip.description.extras = PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE",true) }
             clipboard.setPrimaryClip(clip)
+            ClipHistory.text(this,text,"Mac")
             versionTime = time; versionID = id
             lastRemote = text; suppressRemoteUntil = SystemClock.elapsedRealtime() + 5000
             lastSync = System.currentTimeMillis(); remember(id); send(Protocol.message("ack",ref=id).put("status","ok")); update("Mac에서 복사됨")
@@ -198,10 +199,18 @@ class SyncService : Service() {
         val now = SystemClock.elapsedRealtime()
         if((text == lastRemote && now < suppressRemoteUntil) || (text == lastLocal && now-lastLocalAt < 2000)) return
         lastLocal = text; lastLocalAt = now
+        ClipHistory.text(this,text,"휴대폰")
         // Supersede older local copies. No offline clipboard is retained.
         pending = Protocol.message("clip",text); retries = 0
         versionTime = pending!!.getLong("time"); versionID = pending!!.getString("id")
         main.removeCallbacks(ackTimeout); send(pending!!)
+    }
+    fun canApplyImage(time:Long)=authenticated && !locked() && time>=versionTime && kotlin.math.abs(System.currentTimeMillis()-time)<120000
+    fun imageApplied(time:Long){versionTime=time;versionID="image";lastSync=System.currentTimeMillis();update("Mac에서 이미지 복사됨")}
+    fun localImage(uri:android.net.Uri,record:Boolean=true){
+        if(!authenticated||locked())return
+        if(FilesBridge.busy||FilesBridge.offer!=null){update("진행 중인 파일 전송을 마친 뒤 이미지를 다시 복사하세요");return}
+        FilesBridge.select(this,uri,clipboardImage=true,recordImage=record)
     }
     private fun remember(id: String) { seen.add(id); while(seen.size > 256) seen.remove(seen.first()); prefs.edit().putStringSet("seen",HashSet(seen)).apply() }
     private fun send(m: JSONObject) {

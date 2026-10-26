@@ -34,9 +34,11 @@ object FilesBridge {
     @Volatile private var epoch = 0
     @Volatile private var socket: Socket? = null
     private var expiry: Runnable? = null
+    private var clipboardStaged:java.io.File?=null
     private var managedUpload: StorageBridge.Upload? = null
     private fun state(c: Context, text: String) { main.post { summary=text; SyncService.active?.publish(text); c.sendBroadcast(android.content.Intent(SyncService.STATE).setPackage(c.packageName)) } }
     fun cancel() {
+        clipboardStaged?.delete();clipboardStaged=null
         if(!busy) managedUpload?.temporary?.delete()
         managedUpload=null
         epoch++; try { socket?.close() } catch (_: Exception) {}; socket=null
@@ -47,23 +49,28 @@ object FilesBridge {
         expiry?.let(main::removeCallbacks)
         expiry=Runnable { if(!busy) { cancel(); state(c,"파일 요청이 만료됐습니다") } }.also { main.postDelayed(it,120000) }
     }
-    fun select(c: Context, uri: Uri, remotePath: String? = null) {
+    fun select(c: Context, uri: Uri, remotePath: String? = null, clipboardImage:Boolean=false, recordImage:Boolean=true) {
         if(SyncService.active?.authenticated != true) { state(c,"Mac에 먼저 연결하세요"); return }
-        cancel(); selected=uri; busy=true; val generation=epoch
+        if(clipboardImage&&(busy||offer!=null)){state(c,"파일 전송 중에는 이미지를 보낼 수 없습니다");return}
+        cancel(); selected=uri; busy=true; val generation=epoch; val copiedAt=System.currentTimeMillis()
         state(c,"파일 확인 중")
         worker.execute {
             try {
+                val source=if(clipboardImage){val f=ClipHistory.normalized(c,uri);clipboardStaged=f;if(recordImage)ClipHistory.image(c,f,"휴대폰");Uri.fromFile(f)}else uri
+                if(epoch!=generation){if(clipboardImage)java.io.File(source.path!!).delete();return@execute}
+                selected=source
                 var name="공유 파일"
-                if(uri.scheme=="file") name=java.io.File(uri.path!!).name else c.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { if(it.moveToFirst()) name=it.getString(0).take(180) }
+                if(source.scheme=="file") name=java.io.File(source.path!!).name else c.contentResolver.query(source,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { if(it.moveToFirst()) name=it.getString(0).take(180) }
                 val digest=MessageDigest.getInstance("SHA-256"); var size=0L
-                c.contentResolver.openInputStream(uri)!!.use { input ->
+                c.contentResolver.openInputStream(source)!!.use { input ->
                     val buffer=ByteArray(65536)
                     while(true) { if(epoch!=generation) return@execute; val n=input.read(buffer); if(n<0) break; size+=n; require(size<=LIMIT) { "파일은 256 MB 이하만 보낼 수 있습니다" }; digest.update(buffer,0,n) }
                 }
                 val meta=JSONObject().put("id",UUID.randomUUID().toString()).put("name",name).put("size",size).put("sha",digest.digest().joinToString("") { "%02x".format(it) }).put("flow","upload")
+                if(clipboardImage)meta.put("clipboard",true).put("clipTime",copiedAt)
                 if(remotePath!=null) meta.put("remote",remotePath)
                 main.post { if(epoch==generation) { offer=meta; busy=false; SyncService.active?.sendControl("fileOffer",meta.toString(),meta.getString("id")); arm(c); state(c,"Mac에서 수신을 승인해 주세요") } }
-            } catch(e: Exception) { main.post { if(epoch==generation) { busy=false; state(c,e.message ?: "파일을 읽지 못했습니다") } } }
+            } catch(e: Exception) { main.post { if(epoch==generation) { clipboardStaged?.delete();clipboardStaged=null;busy=false; state(c,e.message ?: "파일을 읽지 못했습니다") } } }
         }
     }
     fun handle(c: Context, message: JSONObject) {
@@ -72,6 +79,11 @@ object FilesBridge {
                 if(busy || offer!=null) { SyncService.active?.sendControl("fileReject",ref=message.optString("ref")); return }
                 try {
                     val m=JSONObject(message.getString("text")); require(m.getString("flow")=="download" && m.getLong("size") in 0..LIMIT && m.getString("sha").matches(Regex("[a-f0-9]{64}")))
+                    if(m.optBoolean("clipboard")) {
+                        require(m.getLong("size")<=ClipHistory.IMAGE_LIMIT && SyncService.active?.canApplyImage(m.optLong("clipTime"))==true){"이미지 크기 또는 복사 시간이 올바르지 않습니다"}
+                        val dir=java.io.File(c.cacheDir,"clip-staging").apply{mkdirs()};val f=java.io.File(dir,UUID.randomUUID().toString()+".png")
+                        offer=m;destination=Uri.fromFile(f);arm(c);SyncService.active?.sendControl("fileAccept",ref=m.getString("id"));state(c,"Mac 이미지 받는 중");return
+                    }
                     if(m.has("path") && !m.isNull("path")) {
                         val upload=StorageBridge.prepareUpload(c,m.getString("path"),m.getString("name"))
                         managedUpload=upload; offer=m; destination=Uri.fromFile(upload.temporary); arm(c)
@@ -100,6 +112,7 @@ object FilesBridge {
     private fun transfer(c: Context, meta: JSONObject, endpoint: JSONObject, generation: Int) {
         var success=false
         val target=destination
+        val sourceUri=selected
         val managed=managedUpload
         try {
             val key=Protocol.key(c) ?: error("연결 키가 없습니다")
@@ -136,6 +149,7 @@ object FilesBridge {
                         while(total<size) { if(epoch!=generation) error("전송 취소됨"); val clear=crypt(false,key,id,index++,readFrame(input)); require(clear.isNotEmpty() && clear.size<=65536); update(clear.size); hash.update(clear); sink.write(clear) }
                     }
                     require(hash.digest().joinToString("") { "%02x".format(it) }==meta.getString("sha")) { "파일 무결성 확인에 실패했습니다" }
+                    if(meta.optBoolean("clipboard")){require(ClipHistory.receive(c,java.io.File(target!!.path!!),meta.optLong("clipTime"))){"새 복사 내용이 있어 이전 이미지를 적용하지 않았습니다"}}
                     if(managed!=null) { require(!managed.final.exists() && managed.temporary.renameTo(managed.final)) { "파일을 저장하지 못했습니다" } }
                     writeFrame(output,Protocol.seal(key,Protocol.message("fileDone",ref=id)).dropLast(1).toByteArray())
                 }
@@ -144,8 +158,9 @@ object FilesBridge {
             if(epoch==generation) state(c,"${meta.getString("name")} · 전송 완료")
         } catch(e: Exception) { if(epoch==generation) state(c,e.message ?: "파일 전송 실패") }
         finally {
+            if(meta.optBoolean("clipboard")){if(meta.optString("flow")=="download")target?.path?.let{java.io.File(it).delete()}else sourceUri?.path?.let{java.io.File(it).delete()}}
             if(!success && target!=null) { if(managed!=null) managed.temporary.delete() else try { DocumentsContract.deleteDocument(c.contentResolver,target) } catch (_: Exception) {} }
-            if(epoch==generation) main.post { if(epoch!=generation) return@post; socket=null; busy=false; offer=null; selected=null; destination=null; managedUpload=null; progress=if(success) 100 else 0; c.sendBroadcast(android.content.Intent(SyncService.STATE).setPackage(c.packageName)) }
+            if(epoch==generation) main.post { if(epoch!=generation) return@post; socket=null; busy=false; offer=null; selected=null; destination=null; managedUpload=null;clipboardStaged=null; progress=if(success) 100 else 0; c.sendBroadcast(android.content.Intent(SyncService.STATE).setPackage(c.packageName)) }
         }
     }
     private fun writeFrame(output: DataOutputStream, bytes: ByteArray) { require(bytes.size in 1..100000); output.writeInt(bytes.size); output.write(bytes); output.flush() }

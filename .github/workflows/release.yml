@@ -53,7 +53,10 @@ jobs:
           mkdir -p dist
           ditto -c -k --sequesterRsrc --keepParent macos/build/CoolSync.app dist/CoolSync-mac-arm64.zip
       - name: Test protocol and file explorer
-        run: python3 tests/explorer-rpc.py
+        run: |
+          python3 tests/history.py
+          python3 tests/image-integration.py
+          python3 tests/explorer-rpc.py
       - uses: actions/upload-artifact@v4
         with:
           name: macos

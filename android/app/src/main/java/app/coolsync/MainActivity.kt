@@ -17,6 +17,8 @@ import android.widget.*
 
 class MainActivity:Activity() {
     private val prefs by lazy{getSharedPreferences("sync",0)}
+    private var animateTab=false
+    private var historyFilter=false
     private var selectedTab=0
     private var pairingDialog:Dialog?=null
     private var connectionDetail:TextView?=null
@@ -118,9 +120,21 @@ class MainActivity:Activity() {
     private fun column()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
     private fun space(parent:LinearLayout,n:Int=16){parent.addView(Space(this),LinearLayout.LayoutParams(1,dp(n)))}
     private fun divider(parent:LinearLayout){parent.addView(View(this).apply{setBackgroundColor(if(paper==Color.WHITE)0xffe4e4e8.toInt()else 0xff3b3b3f.toInt())},LinearLayout.LayoutParams(-1,dp(1)))}
-    private fun group(parent:LinearLayout,title:String):LinearLayout{parent.addView(label(title,13f,secondary));space(parent,8);val g=column();g.setPadding(dp(16),dp(2),dp(16),dp(2));g.background=GradientDrawable().apply{setColor(paper);cornerRadius=dp(12).toFloat()};parent.addView(g,LinearLayout.LayoutParams(-1,-2));space(parent,24);return g}
-    private fun row(parent:LinearLayout,title:String,value:String,detail:String?=null,action:(()->Unit)?=null){val row=column();row.setPadding(0,dp(14),0,dp(14));val line=LinearLayout(this);line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f));val valueView=label(value,14f,if(action!=null)blue else secondary);values[title]=valueView;line.addView(valueView);row.addView(line);if(detail!=null){space(row,4);val detailView=label(detail,13f,secondary);details[title]=detailView;row.addView(detailView)};if(action!=null){row.isFocusable=true;row.setOnClickListener{action()}};parent.addView(row);divider(parent)}
-    private fun fingerprint()="${SyncService.active?.authenticated}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}"
+    private fun surface():android.graphics.drawable.Drawable=GradientDrawable(GradientDrawable.Orientation.TL_BR,if(paper==Color.WHITE)intArrayOf(0xfaffffff.toInt(),0xdfffffff.toInt())else intArrayOf(0xf232343a.toInt(),0xe51c1d24.toInt())).apply{cornerRadius=dp(22).toFloat();setStroke(dp(1),if(paper==Color.WHITE)0xffffffff.toInt()else 0xff4c4e58.toInt())}
+    private fun group(parent:LinearLayout,title:String):LinearLayout{parent.addView(label(title,12f,secondary,true).apply{setPadding(dp(14),0,0,0)});space(parent,9);val g=column();g.setPadding(dp(18),dp(2),dp(18),dp(2));g.background=surface();g.elevation=dp(1).toFloat();parent.addView(g,LinearLayout.LayoutParams(-1,-2));space(parent,26);return g}
+    private fun interactive(view:View,action:()->Unit){view.isFocusable=true;view.setOnClickListener{it.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);action()};view.setOnTouchListener{v,e->when(e.actionMasked){MotionEvent.ACTION_DOWN->v.animate().scaleX(.975f).scaleY(.975f).setDuration(100).start();MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->v.animate().scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(android.view.animation.OvershootInterpolator(.6f)).start()};false}}
+    private fun row(parent:LinearLayout,title:String,value:String,detail:String?=null,action:(()->Unit)?=null){
+        if(parent.childCount>0)divider(parent)
+        val row=column();row.minimumHeight=dp(56);row.gravity=Gravity.CENTER_VERTICAL;row.setPadding(0,dp(14),0,dp(14));val line=LinearLayout(this);line.gravity=Gravity.CENTER_VERTICAL;line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f))
+        val valueView=label(if(value=="›")""else value.replace(" ›",""),14f,secondary);values[title]=valueView;line.addView(valueView)
+        if(action!=null)line.addView(Chevron(this,secondary),LinearLayout.LayoutParams(dp(16),dp(18)).apply{leftMargin=dp(10)})
+        row.addView(line);if(detail!=null){space(row,5);val detailView=label(detail,13f,secondary);details[title]=detailView;row.addView(detailView)};if(action!=null)interactive(row,action);parent.addView(row)
+    }
+    private fun toggleRow(parent:LinearLayout,title:String,checked:Boolean,changed:(Boolean)->Unit){
+        if(parent.childCount>0)divider(parent)
+        val line=LinearLayout(this);line.gravity=Gravity.CENTER_VERTICAL;line.minimumHeight=dp(58);line.setPadding(0,dp(12),0,dp(12));line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f));val control=GlassToggle(this,checked,blue,changed).apply{contentDescription=title};line.addView(control,LinearLayout.LayoutParams(dp(50),dp(30)).apply{leftMargin=dp(18)});line.setOnClickListener{control.performClick()};parent.addView(line)
+    }
+    private fun fingerprint()="${SyncService.active?.authenticated}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}:${if(selectedTab==1)ClipHistory.revision else 0}"
     private fun refreshLive(){
         if(fingerprint()!=liveFingerprint){render();return}
         connectionDetail?.text=connectionText()
@@ -137,7 +151,7 @@ class MainActivity:Activity() {
     }
     private fun shape(color:Int,radius:Int=16)=GradientDrawable().apply{setColor(color);cornerRadius=dp(radius).toFloat()}
     private fun button(parent:LinearLayout,title:String,primary:Boolean=true,action:()->Unit){
-        val v=label(title,16f,if(primary)Color.WHITE else blue,true).apply{gravity=Gravity.CENTER;minHeight=dp(50);background=shape(if(primary)blue else if(paper==Color.WHITE)0xffeaf2ff.toInt() else 0xff172c49.toInt(),14);isFocusable=true;setOnClickListener{action()}}
+        val v=label(title,16f,if(primary)Color.WHITE else blue,true).apply{gravity=Gravity.CENTER;minHeight=dp(50);background=shape(if(primary)blue else if(paper==Color.WHITE)0xffeaf2ff.toInt() else 0xff172c49.toInt(),14);isFocusable=true;interactive(this,action)}
         parent.addView(v,LinearLayout.LayoutParams(-1,dp(50)));space(parent,10)
     }
     private fun pauseConnection(){autoConnect=false;prefs.edit().putBoolean("enabled",false).apply();stopService(Intent(this,SyncService::class.java));render()}
@@ -148,13 +162,13 @@ class MainActivity:Activity() {
         values.clear();details.clear();connectionDetail=null;connectionBadge=null
         val dark=resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK==Configuration.UI_MODE_NIGHT_YES
         ink=if(dark)0xfff4f4f6.toInt()else 0xff1c1c1e.toInt();secondary=if(dark)0xffa0a0a6.toInt()else 0xff707078.toInt();paper=if(dark)0xff1c1c1e.toInt()else Color.WHITE
-        val root=column();root.setBackgroundColor(if(dark)Color.BLACK else 0xfff2f2f7.toInt())
+        val root=FrameLayout(this);root.background=GradientDrawable(GradientDrawable.Orientation.TL_BR,if(dark)intArrayOf(0xff151923.toInt(),0xff101117.toInt(),0xff1e1724.toInt())else intArrayOf(0xffeaf3ff.toInt(),0xfff4f4f9.toInt(),0xfff8edf4.toInt()))
         root.setOnApplyWindowInsetsListener{view,insets->val bars=insets.getInsets(WindowInsets.Type.systemBars());view.setPadding(bars.left,bars.top,bars.right,bars.bottom);insets}
-        val scroll=ScrollView(this);root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        val scroll=ScrollView(this);scroll.clipToPadding=false;scroll.setPadding(0,0,0,dp(100));root.addView(scroll,FrameLayout.LayoutParams(-1,-1))
         val frame=FrameLayout(this);scroll.addView(frame)
-        val body=column();body.setPadding(dp(24),dp(24),dp(24),dp(20));frame.addView(body,FrameLayout.LayoutParams(dp((resources.configuration.screenWidthDp-0).coerceAtMost(560)),-2,Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        val body=column();body.setPadding(dp(20),dp(24),dp(20),dp(20));frame.addView(body,FrameLayout.LayoutParams(dp((resources.configuration.screenWidthDp-0).coerceAtMost(560)),-2,Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         val titles=listOf("연결","클립보드","파일","설정")
-        body.addView(label(titles[selectedTab],32f,ink,true));space(body,24)
+        body.addView(label(titles[selectedTab],30f,ink,true));space(body,24)
         when(selectedTab){
             0->{
                 val connected=SyncService.active?.authenticated==true
@@ -172,12 +186,26 @@ class MainActivity:Activity() {
                 if(issue!=null){val g=group(body,"최근 연결 문제");g.addView(label(issue,14f,secondary));space(g,12);button(g,"원인과 해결 방법",false){diagnostics()}}
             }
             1->{
-                val g=group(body,"자동 공유")
-                row(g,"연결 상태",if(SyncService.active?.authenticated==true)"연결됨"else"연결 필요",action={selectedTab=0;render()})
-                row(g,"자동 복사",if(accessibility())"사용 중"else"설정 필요","휴대폰에서 복사하면 연결된 Mac에 반영합니다.",action={showPermissions()})
-                row(g,"마지막 동기화",lastSyncText())
-                body.addView(label("클립보드 내용은 이 화면에 저장하거나 표시하지 않습니다. 휴대폰이 잠겨 있을 때는 공유가 중지됩니다.",14f,secondary))
+                val tools=group(body,"클립보드")
+                toggleRow(tools,"복사 기록 저장",ClipHistory.enabled(this)){getSharedPreferences("clipboard",0).edit().putBoolean("history",it).apply()}
+                row(tools,"현재 클립보드 가져오기","›","자동 감지가 안 되는 앱의 텍스트·이미지 한 장을 가져옵니다.",action={captureNow()})
+                toggleRow(tools,"즐겨찾기만 보기",historyFilter){historyFilter=it;render()}
+                val items=ClipHistory.entries(this).filter{!historyFilter||it.optBoolean("favorite")}
+                val list=group(body,if(historyFilter)"즐겨찾기"else"최근 기록 · 최대 200개")
+                if(items.isEmpty()){val empty=label("아직 기록이 없습니다. CoolSync에서 감지한 새 복사부터 여기에 표시됩니다.",14f,secondary);empty.setPadding(0,dp(18),0,dp(18));list.addView(empty)}
+                items.forEach{item->
+                    if(list.childCount>0)divider(list)
+                    val entry=column();entry.setPadding(0,dp(14),0,dp(14))
+                    if(item.has("image")){val image=ImageView(this);val f=ClipHistory.file(this,item);val bounds=android.graphics.BitmapFactory.Options().apply{inJustDecodeBounds=true};android.graphics.BitmapFactory.decodeFile(f.path,bounds);val options=android.graphics.BitmapFactory.Options().apply{inSampleSize=maxOf(1,maxOf(bounds.outWidth,bounds.outHeight)/256)};image.setImageBitmap(android.graphics.BitmapFactory.decodeFile(f.path,options));image.scaleType=ImageView.ScaleType.CENTER_CROP;image.background=shape(0x10007aff,12);image.clipToOutline=true;entry.addView(image,LinearLayout.LayoutParams(-1,dp(120)))}else entry.addView(label(item.optString("text"),15f).apply{maxLines=3;ellipsize=android.text.TextUtils.TruncateAt.END})
+                    space(entry,6);entry.addView(label(item.optString("source")+" · "+android.text.format.DateFormat.format("M/d a h:mm",item.optLong("time")),11f,secondary));space(entry,10)
+                    val actions=LinearLayout(this)
+                    fun action(title:String,run:()->Unit){actions.addView(label(title,13f,blue,true).apply{gravity=Gravity.CENTER;minHeight=dp(42);background=shape(0x0c007aff,12);interactive(this,run)},LinearLayout.LayoutParams(0,dp(42),1f).apply{rightMargin=dp(6)})}
+                    action("다시 복사"){ClipHistory.copy(this,item);toast("클립보드에 복사했습니다")};action(if(item.optBoolean("favorite"))"★ 해제"else"☆ 즐겨찾기"){ClipHistory.favorite(this,item.getString("id"));render()};action("삭제"){ClipHistory.remove(this,item.getString("id"));render()};entry.addView(actions);list.addView(entry)
+                }
+                if(items.isNotEmpty())button(body,"모든 기록 삭제",false){val(d,b)=sheet("기록을 모두 삭제할까요?");b.addView(label("이 기기에 저장한 즐겨찾기와 이미지도 삭제합니다. 상대 기기의 기록에는 영향을 주지 않습니다.",14f,secondary));space(b,18);button(b,"모두 삭제"){ClipHistory.clear(this);d.dismiss();render()};button(b,"취소",false){d.dismiss()}}
+                body.addView(label("기록은 이 기기에만 저장합니다. 민감한 클립보드 표시는 존중하며, 휴대폰 잠금 중에는 공유하지 않습니다.",12f,secondary))
             }
+
             2->{
                 val g=group(body,"휴대폰 저장소")
                 row(g,"파일 관리",if(storage())"허용됨"else"권한 필요",action={showPermissions()})
@@ -190,19 +218,25 @@ class MainActivity:Activity() {
             3->{
                 val g=group(body,"연결 및 권한")
                 row(g,"권한 관리","›",action={showPermissions()});row(g,"연결 진단","›",action={diagnostics()})
-                val boot=Switch(this).apply{text="재부팅 후 연결 시작";textSize=16f;setTextColor(ink);isChecked=prefs.getBoolean("boot",true);setPadding(0,dp(14),0,dp(14));setOnCheckedChangeListener{_,v->prefs.edit().putBoolean("boot",v).apply()}};g.addView(boot)
+                toggleRow(g,"재부팅 후 연결 시작",prefs.getBoolean("boot",true)){prefs.edit().putBoolean("boot",it).apply()}
+
                 val unlink=group(body,"등록된 Mac")
                 row(unlink,"다른 Mac 연결","›",action={manualKey()})
                 row(unlink,"등록 해제","›","저장된 연결 정보를 삭제합니다.",action={confirmUnlink()})
                 val updates=group(body,"앱 업데이트")
                 row(updates,"업데이트",AppUpdates.status,action={updateSheet()})
-                val automatic=Switch(this).apply{text="새 업데이트 자동 확인";textSize=16f;setTextColor(ink);isChecked=getSharedPreferences("updates",0).getBoolean("automatic",true);setOnCheckedChangeListener{_,v->getSharedPreferences("updates",0).edit().putBoolean("automatic",v).apply()}};updates.addView(automatic)
+                toggleRow(updates,"새 업데이트 자동 확인",getSharedPreferences("updates",0).getBoolean("automatic",true)){getSharedPreferences("updates",0).edit().putBoolean("automatic",it).apply()}
+
                 body.addView(label("CoolSync",13f,secondary))
             }
         }
-        divider(root)
-        val nav=LinearLayout(this).apply{setPadding(dp(8),dp(8),dp(8),dp(8));setBackgroundColor(paper)}
-        titles.forEachIndexed{i,title->val item=column();item.gravity=Gravity.CENTER;item.background=shape(if(i==selectedTab)if(dark)0xff172c49.toInt()else 0xffeaf2ff.toInt()else Color.TRANSPARENT,18);item.addView(LinkIcon(this,i,if(i==selectedTab)blue else secondary),LinearLayout.LayoutParams(dp(24),dp(24)));space(item,4);item.addView(label(title,11f,if(i==selectedTab)blue else secondary,i==selectedTab).apply{gravity=Gravity.CENTER});item.contentDescription=title+" 탭";item.isFocusable=true;item.setOnClickListener{selectedTab=i;render()};nav.addView(item,LinearLayout.LayoutParams(0,dp(58),1f).apply{setMargins(dp(3),0,dp(3),0)})};root.addView(nav)
+        val nav=LinearLayout(this).apply{setPadding(dp(6),dp(6),dp(6),dp(6));background=surface();elevation=dp(10).toFloat()}
+        titles.forEachIndexed{i,title->
+            val item=column();item.gravity=Gravity.CENTER;item.background=if(i==selectedTab)GradientDrawable(GradientDrawable.Orientation.TL_BR,intArrayOf(0x38007aff,0x18007aff)).apply{cornerRadius=dp(22).toFloat();setStroke(dp(1),0x22007aff)}else null
+            item.addView(LinkIcon(this,i,if(i==selectedTab)blue else secondary),LinearLayout.LayoutParams(dp(23),dp(23)));space(item,4);item.addView(label(title,10f,if(i==selectedTab)blue else secondary,i==selectedTab).apply{gravity=Gravity.CENTER});item.contentDescription=title+" 탭";interactive(item){if(selectedTab!=i){selectedTab=i;animateTab=true;render()}};nav.addView(item,LinearLayout.LayoutParams(0,dp(54),1f).apply{setMargins(dp(2),0,dp(2),0)})
+        }
+        root.addView(nav,FrameLayout.LayoutParams(dp((resources.configuration.screenWidthDp-32).coerceAtMost(520)),-2,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply{bottomMargin=dp(12)})
+        if(animateTab&&android.animation.ValueAnimator.areAnimatorsEnabled()){scroll.alpha=0f;scroll.translationY=dp(12).toFloat();scroll.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(android.view.animation.DecelerateInterpolator()).start()};animateTab=false
         setContentView(root);root.requestApplyInsets()
         window.insetsController?.setSystemBarsAppearance(if(dark)0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
         liveFingerprint=fingerprint()
@@ -213,7 +247,7 @@ class MainActivity:Activity() {
         body.addView(label(title,21f,ink,true));space(body,12)
         val scroll=ScrollView(this);scroll.addView(body);dialog.setContentView(scroll);dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.setOnDismissListener{if(pairingDialog==dialog)pairingDialog=null};pairingDialog=dialog
-        dialog.show();dialog.window?.setLayout(dp((resources.configuration.screenWidthDp-40).coerceAtMost(380)),-2);dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        dialog.show();if(Build.VERSION.SDK_INT>=31){dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);dialog.window?.attributes=dialog.window?.attributes?.apply{setBlurBehindRadius(18)}};dialog.window?.setLayout(dp((resources.configuration.screenWidthDp-40).coerceAtMost(380)),-2);dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         return dialog to body
     }
     private fun manualKey(){
@@ -232,6 +266,11 @@ class MainActivity:Activity() {
         }
         button(body,"취소",false){dialog.dismiss()}
     }
+    private fun captureNow(){
+        try{val cb=getSystemService(android.content.ClipboardManager::class.java);val clip=cb.primaryClip ?: return;val desc=cb.primaryClipDescription;if(desc?.extras?.getBoolean("android.content.extra.IS_SENSITIVE",false)==true){toast("민감한 내용은 기록하지 않습니다");return};val item=clip.getItemAt(0);val uri=item.uri
+            if(uri!=null&&contentResolver.getType(uri)?.startsWith("image/")==true){val file=ClipHistory.normalized(this,uri);ClipHistory.image(this,file,"휴대폰");SyncService.active?.localImage(Uri.fromFile(file),false)}else item.text?.toString()?.let{ClipHistory.text(this,it,"휴대폰");SyncService.active?.localCopy(it)};render()
+        }catch(_:Exception){toast("이 이미지에 접근할 수 없습니다. 원본 앱에서 공유 기능을 사용해 주세요")}
+    }
     private fun updateSheet(){
         val(d,b)=sheet("앱 업데이트");b.addView(label(AppUpdates.status,15f,secondary));space(b,16)
         when{AppUpdates.busy->b.addView(label("작업이 끝나면 설정 화면에 결과가 표시됩니다.",14f,secondary));AppUpdates.ready()->button(b,"업데이트 설치"){d.dismiss();AppUpdates.install(this)};AppUpdates.available!=null->button(b,"다운로드"){d.dismiss();AppUpdates.download(this)};else->button(b,"업데이트 확인"){d.dismiss();AppUpdates.check(this)}}
@@ -246,6 +285,15 @@ class MainActivity:Activity() {
         space(b,12);b.addView(label(prefs.getString("connectionIssue",null) ?: connectionText(),14f,secondary));space(b,8)
         b.addView(label("Mac에서도 CoolSync를 열고 Bluetooth를 켜세요. 인증이 실패하면 Mac의 현재 QR을 다시 스캔하고 두 기기의 날짜·시간을 자동으로 설정하세요.",14f,secondary));space(b,20)
         button(b,"다시 연결"){d.dismiss();reconnect()};button(b,"권한 설정",false){d.dismiss();showPermissions()};button(b,"닫기",false){d.dismiss()}
+    }
+    private class Chevron(c:Context,private val tint:Int):View(c){private val paint=android.graphics.Paint(3).apply{color=tint;style=android.graphics.Paint.Style.STROKE;strokeWidth=2f;strokeCap=android.graphics.Paint.Cap.ROUND;strokeJoin=android.graphics.Paint.Join.ROUND};override fun onDraw(canvas:android.graphics.Canvas){val x=width*.4f;val y=height*.5f;canvas.drawLine(x,y-5*resources.displayMetrics.density,x+5*resources.displayMetrics.density,y,paint);canvas.drawLine(x+5*resources.displayMetrics.density,y,x,y+5*resources.displayMetrics.density,paint)}}
+    private class GlassToggle(c:Context,initial:Boolean,private val tint:Int,private val changed:(Boolean)->Unit):View(c){
+        private var checked=initial;private var position=if(initial)1f else 0f;private var animator:android.animation.ValueAnimator?=null
+        private val paint=android.graphics.Paint(3)
+        init{isClickable=true;isFocusable=true;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES;setLayerType(LAYER_TYPE_SOFTWARE,null)}
+        override fun performClick():Boolean{super.performClick();checked=!checked;performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);animator?.cancel();if(android.animation.ValueAnimator.areAnimatorsEnabled()){animator=android.animation.ValueAnimator.ofFloat(position,if(checked)1f else 0f).apply{duration=220;interpolator=android.view.animation.DecelerateInterpolator();addUpdateListener{position=it.animatedValue as Float;invalidate()};start()}}else{position=if(checked)1f else 0f;invalidate()};changed(checked);return true}
+        override fun onDraw(canvas:android.graphics.Canvas){val h=height.toFloat();val w=width.toFloat();paint.clearShadowLayer();paint.color=android.animation.ArgbEvaluator().evaluate(position,0xffc8cad2.toInt(),tint)as Int;canvas.drawRoundRect(0f,0f,w,h,h/2,h/2,paint);paint.color=Color.WHITE;paint.setShadowLayer(h*.08f,0f,h*.04f,0x40000000);canvas.drawCircle(h/2+(w-h)*position,h/2,h*.405f,paint);paint.clearShadowLayer()}
+        override fun onInitializeAccessibilityNodeInfo(info:android.view.accessibility.AccessibilityNodeInfo){super.onInitializeAccessibilityNodeInfo(info);info.className="android.widget.Switch";info.isCheckable=true;info.isChecked=checked}
     }
     private class LinkIcon(context:Context,private val kind:Int,private val tint:Int):View(context){
         override fun onDraw(c:android.graphics.Canvas){super.onDraw(c);c.save();c.scale(width/24f,height/24f);val p=android.graphics.Paint(3).apply{color=tint;style=android.graphics.Paint.Style.STROKE;strokeWidth=1.7f;strokeCap=android.graphics.Paint.Cap.ROUND;strokeJoin=android.graphics.Paint.Join.ROUND}

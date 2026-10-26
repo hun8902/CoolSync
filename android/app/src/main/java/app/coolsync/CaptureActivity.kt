@@ -32,7 +32,10 @@ class CaptureActivity : Activity() {
             if(desc.timestamp <= 0 || desc.timestamp < eventAt-1200 || System.currentTimeMillis()-desc.timestamp > 4000) return
             if(desc.extras?.getBoolean("android.content.extra.IS_SENSITIVE",false) == true) return
             val clip = clipboard.primaryClip ?: return
-            if(clip.itemCount > 0) clip.getItemAt(0).text?.toString()?.let { sync.localCopy(it) }
+            if(clip.itemCount > 0){val item=clip.getItemAt(0);val uri=item.uri
+                if(uri!=null && uri.authority!="$packageName.clipboard" && contentResolver.getType(uri)?.startsWith("image/")==true)sync.localImage(uri)
+                else item.text?.toString()?.let { sync.localCopy(it) }
+            }
         } catch (_: Exception) { /* No content logging. */ }
         finally { finish() }
     }

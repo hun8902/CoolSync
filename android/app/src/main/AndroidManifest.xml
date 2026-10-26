@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <application android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:dataExtractionRules="@xml/backup_rules" android:fullBackupContent="false" android:label="CoolSync" android:theme="@style/CoolSyncTheme" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true">
+        <provider android:name=".ClipboardImageProvider" android:authorities="${applicationId}.clipboard" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".UpdateFileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true" />
         <activity android:name=".MainActivity" android:launchMode="singleTop" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
