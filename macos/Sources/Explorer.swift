@@ -12,6 +12,7 @@ struct RemoteEntry:Identifiable,Decodable {
     let modified:Int64
 }
 struct RemoteTrash:Identifiable,Decodable{let id:String;let name:String;let original:String;let deleted:Int64}
+private struct ExplorerPromise{let entry:RemoteEntry;let target:URL;let quiet:Bool;let valid:(()->Bool)?;let completion:(Error?)->Void}
 private enum ExplorerJob{case upload(URL,String);case download(String,URL);case mkdir(String,String)}
 
 final class ExplorerModel:ObservableObject {
@@ -41,7 +42,8 @@ final class ExplorerModel:ObservableObject {
     private var jobs:[ExplorerJob]=[]
     private var queueActive=false
     private var promisedCompletion:((Error?)->Void)?
-    private var promiseQueue:[(RemoteEntry,URL,(Error?)->Void)]=[]
+    private var promiseQueue:[ExplorerPromise]=[]
+    private var quietJob=false
     private var jobDeadline:DispatchWorkItem?
     var hasClipboard:Bool{!clipboard.isEmpty}
     var visible:[RemoteEntry] {
@@ -140,17 +142,15 @@ final class ExplorerModel:ObservableObject {
         else{let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true;panel.prompt="여기에 복사";if panel.runModal() == .OK,let url=panel.url{enqueueDownloads(selected,to:url,single:nil){[weak self]error in if error==nil && move{self?.mutate("trash",["paths":selected.map{$0.path}])}}}}
     }
     func exportEntries(_ entries:[RemoteEntry],to folder:URL,completion:@escaping(Error?)->Void){enqueueDownloads(entries,to:folder,single:nil,completion:completion)}
-    func promise(_ entry:RemoteEntry,to target:URL,completion:@escaping(Error?)->Void){
-        if queueActive{promiseQueue.append((entry,target,completion));return}
-        enqueueDownloads([entry],to:target.deletingLastPathComponent(),single:target){[weak self]error in
-            completion(error)
-            guard let self,!self.promiseQueue.isEmpty else{return};let next=self.promiseQueue.removeFirst()
-            DispatchQueue.main.async{self.promise(next.0,to:next.1,completion:next.2)}
-        }
+    func promise(_ entry:RemoteEntry,to target:URL,quiet:Bool=false,valid:(()->Bool)?=nil,completion:@escaping(Error?)->Void){
+        guard valid?() != false else{completion(CocoaError(.userCancelled));DispatchQueue.main.async{[weak self]in self?.resumePromises()};return}
+        if queueActive || files?.hasTransfer==true{promiseQueue.append(ExplorerPromise(entry:entry,target:target,quiet:quiet,valid:valid,completion:completion));return}
+        enqueueDownloads([entry],to:target.deletingLastPathComponent(),single:target,quiet:quiet){[weak self]error in completion(error);DispatchQueue.main.async{self?.resumePromises()}}
     }
-    private func enqueueDownloads(_ selected:[RemoteEntry],to folder:URL,single:URL?,completion:((Error?)->Void)?=nil){
+    func resumePromises(){guard !queueActive,files?.hasTransfer != true,connected?()==true,!promiseQueue.isEmpty else{return};let next=promiseQueue.removeFirst();promise(next.entry,to:next.target,quiet:next.quiet,valid:next.valid,completion:next.completion)}
+    private func enqueueDownloads(_ selected:[RemoteEntry],to folder:URL,single:URL?,quiet:Bool=false,completion:((Error?)->Void)?=nil){
         guard !queueActive,files?.hasTransfer != true else{completion?(CocoaError(.fileWriteUnknown));fail("진행 중인 파일 작업을 먼저 마치세요");return}
-        jobs=[];queueActive=true;promisedCompletion=completion;busy=true
+        jobs=[];queueActive=true;quietJob=quiet;promisedCompletion=completion;busy=true
         func collect(_ items:[RemoteEntry],_ parent:URL,_ done:@escaping()->Void){
             guard let item=items.first else{done();return}
             let rest=Array(items.dropFirst());let target=single != nil && selected.count==1 && item.path==selected[0].path ? single!:parent.appendingPathComponent(item.name)
@@ -168,14 +168,14 @@ final class ExplorerModel:ObservableObject {
     private func nextJob(){
         guard queueActive else{return}
         jobDeadline?.cancel()
-        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let completion=promisedCompletion;promisedCompletion=nil;completion?(nil);onFilesystemChange?();reload();return}
-        let timeout=DispatchWorkItem{[weak self]in guard let self,self.queueActive,self.files?.hasTransfer != true else{return};self.stopJobs("파일 전송 요청에 응답이 없습니다")}
+        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{onFilesystemChange?();reload()};completion?(nil);resumePromises();return}
+        let timeout=DispatchWorkItem{[weak self]in guard let self,self.queueActive,self.files?.transportActive != true else{return};self.stopJobs("파일 전송 요청에 응답이 없습니다")}
         jobDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+90,execute:timeout)
         busy=true;let job=jobs.removeFirst();status="남은 작업 \(jobs.count+1)개"
         files?.onCompletion={[weak self]success in if success{self?.nextJob()}else{self?.stopJobs(self?.files?.summary ?? "파일 전송 실패")}}
         switch job{
         case .upload(let url,let folder):files?.stage(url,folder:folder)
-        case .download(let remote,let target):files?.expectedDownloads[remote]=target;call("download",["path":remote]){[weak self]r in if r["ok"]as?Bool != true{self?.stopJobs(r["error"]as?String ?? "파일을 읽지 못했습니다")}}
+        case .download(let remote,let target):files?.expectedDownloads[remote]=target;call("download",["path":remote],quiet:quietJob){[weak self]r in if r["ok"]as?Bool != true{self?.stopJobs(r["error"]as?String ?? "파일을 읽지 못했습니다")}}
         case .mkdir(let parent,let name):call("mkdir",["path":parent,"name":name]){[weak self]r in if r["ok"]as?Bool==true{self?.nextJob()}else{self?.stopJobs(r["error"]as?String ?? "폴더 생성 실패")}}
         }
     }
@@ -183,9 +183,9 @@ final class ExplorerModel:ObservableObject {
         jobDeadline?.cancel();for timer in timers.values{timer.cancel()};timers=[:];callbacks=[:];quietCalls=[]
         jobs=[];queueActive=false;files?.expectedDownloads=[:];files?.onCompletion=nil;files?.cancel(notify:false)
         let completion=promisedCompletion;promisedCompletion=nil;completion?(CocoaError(.userCancelled))
-        let promises=promiseQueue;promiseQueue=[];for request in promises{request.2(CocoaError(.userCancelled))}
+        let promises=promiseQueue;promiseQueue=[];for request in promises{request.completion(CocoaError(.userCancelled))}
         busy=false;selection=[];error=nil;needsSetup=false;status="휴대폰 연결이 끊겼습니다"
     }
     func cancelJobs(){files?.cancel();stopJobs("작업 취소됨")}
-    private func stopJobs(_ message:String){jobDeadline?.cancel();jobs=[];queueActive=false;busy=false;files?.expectedDownloads=[:];files?.onCompletion=nil;let completion=promisedCompletion;promisedCompletion=nil;completion?(CocoaError(.fileWriteUnknown));fail(message)}
+    private func stopJobs(_ message:String){jobDeadline?.cancel();jobs=[];queueActive=false;busy=false;files?.expectedDownloads=[:];files?.onCompletion=nil;let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{fail(message)}else{status=message};completion?(NSError(domain:"CoolSync",code:1,userInfo:[NSLocalizedDescriptionKey:message]));resumePromises()}
 }

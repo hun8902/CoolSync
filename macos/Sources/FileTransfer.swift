@@ -37,11 +37,14 @@ final class FileTransfer: ObservableObject {
     var sendControl: ((String,String,String)->Void)?
     var key: (()->Data)?
     var connected: (()->Bool)?
+    var onIdle:(()->Void)?
+    private func signalIdle(){DispatchQueue.main.async{[weak self]in guard let self,!self.hasTransfer else{return};self.onIdle?()}}
     var onCompletion: ((Bool)->Void)?
     var imageReceived:((URL,Int64)->Void)?
     var canReceiveImage:((Int64)->Bool)?
     var expectedDownloads: [String:URL] = [:]
-    var hasTransfer: Bool { meta != nil || busy }
+    var transportActive:Bool{meta != nil || busy}
+    var hasTransfer: Bool { meta != nil || busy || !expectedDownloads.isEmpty }
     private var meta: FileMeta?
     private var source: URL?
     private var session: TransferSession?
@@ -50,17 +53,17 @@ final class FileTransfer: ObservableObject {
     func cancel(notify: Bool=true) {
         if meta?.clipboard==true,let source{try? FileManager.default.removeItem(at:source)}
         if notify, let m=meta { sendControl?("fileReject","",m.id) }
-        expiry?.cancel(); session?.cancel(); session=nil; meta=nil; source=nil; incoming=nil; busy=false; progress=0; summary="전송 취소됨"
+        expiry?.cancel(); session?.cancel(); session=nil; meta=nil; source=nil; incoming=nil; busy=false; progress=0; summary="전송 취소됨";signalIdle()
     }
     func chooseFile() {
         guard connected?()==true else { summary="휴대폰에 먼저 연결하세요"; return }
-        guard meta==nil, !busy else { summary="진행 중인 전송을 마치거나 취소하세요"; return }
+        guard meta==nil, !busy,expectedDownloads.isEmpty else { summary="진행 중인 전송을 마치거나 취소하세요"; return }
         let panel=NSOpenPanel(); panel.canChooseDirectories=false; panel.allowsMultipleSelection=false
         guard panel.runModal() == .OK, let url=panel.url else { return }
         stage(url,folder:nil)
     }
     func stage(_ url:URL,folder:String?,clipboard:Bool=false,clipTime:Int64?=nil) {
-        guard connected?()==true, meta==nil, !busy else { summary="기기 연결 또는 진행 중인 작업을 확인하세요";if clipboard{try? FileManager.default.removeItem(at:url)}else{onCompletion?(false)};return }
+        guard connected?()==true, meta==nil, !busy,expectedDownloads.isEmpty else { summary="기기 연결 또는 진행 중인 작업을 확인하세요";if clipboard{try? FileManager.default.removeItem(at:url)}else{onCompletion?(false)};return }
         busy=true; summary="파일 확인 중"; let task=TransferSession(); session=task
         worker.async { [weak self] in
             do {
@@ -69,7 +72,7 @@ final class FileTransfer: ObservableObject {
                 var m=FileMeta(id:UUID().uuidString,name:url.lastPathComponent,size:Int64(size),sha:hash,flow:"download")
                 m.path=folder;m.clipboard=clipboard ? true:nil;m.clipTime=clipTime
                 DispatchQueue.main.async { guard let self, !task.cancelled else { return }; self.busy=false; self.meta=m; self.source=url; self.summary="휴대폰에서 수신을 승인해 주세요"; self.sendControl?("fileOffer",self.json(m),m.id); self.arm() }
-            } catch { DispatchQueue.main.async { guard let self, !task.cancelled else { return }; self.busy=false; self.meta=nil; self.summary=error.localizedDescription;if clipboard{try? FileManager.default.removeItem(at:url)}else{self.onCompletion?(false)} } }
+            } catch { DispatchQueue.main.async { guard let self, !task.cancelled else { return }; self.busy=false; self.meta=nil; self.summary=error.localizedDescription;if clipboard{try? FileManager.default.removeItem(at:url)}else{self.onCompletion?(false)};self.signalIdle() } }
         }
     }
     func handle(_ message: Wire.Message) {
@@ -77,13 +80,14 @@ final class FileTransfer: ObservableObject {
         case "fileOffer":
             guard meta==nil, !busy else { sendControl?("fileReject","",message.ref); return }
             guard let m=try? JSONDecoder().decode(FileMeta.self,from:Data(message.text.utf8)), m.flow=="upload", m.size>=0, m.size<=Self.limit, m.sha.count==64, UUID(uuidString:m.id) != nil else { summary="올바르지 않은 파일 요청입니다"; return }
+            if m.remote==nil && !expectedDownloads.isEmpty{sendControl?("fileReject","",m.id);return}
             if m.clipboard==true {
                 guard m.size<=20*1024*1024,let time=m.clipTime,canReceiveImage?(time)==true else{sendControl?("fileReject","이미지 수신 조건을 확인하세요",m.id);return}
                 let dir=FileManager.default.temporaryDirectory.appendingPathComponent("CoolSyncClipboard",isDirectory:true);try? FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
                 meta=m;serve(m,source:nil,destination:dir.appendingPathComponent(UUID().uuidString+".png"));return
             }
+            if let remote=m.remote{guard let target=expectedDownloads.removeValue(forKey:remote)else{sendControl?("fileReject","",m.id);return};meta=m;incoming=nil;serve(m,source:nil,destination:target);return}
             meta=m
-            if let remote=m.remote,let target=expectedDownloads.removeValue(forKey:remote) { incoming=nil;serve(m,source:nil,destination:target);return }
             incoming=m; summary="휴대폰에서 파일을 보냈습니다"; arm()
             NotificationCenter.default.post(name:.init("CoolSyncIncomingFile"),object:nil,userInfo:["name":m.name])
         case "fileAccept":
@@ -169,10 +173,10 @@ final class FileTransfer: ObservableObject {
                     var done=Wire.Message(type:"fileDone"); done.ref=m.id; try Self.writeFrame(client,data:Data(try Wire.seal(done,key:key).dropLast()),task:task)
                 }
                 task.close(client)
-                DispatchQueue.main.async { guard !task.cancelled else { return }; self.busy=false; self.meta=nil; self.source=nil; self.summary="\(m.name) · 전송 완료"; self.progress=1; self.session=nil;if m.clipboard==true{if let destination{self.imageReceived?(destination,m.clipTime ?? 0);try? FileManager.default.removeItem(at:destination)};if let source{try? FileManager.default.removeItem(at:source)}}else{self.onCompletion?(true)} }
+                DispatchQueue.main.async { guard !task.cancelled else { return }; self.busy=false; self.meta=nil; self.source=nil; self.summary="\(m.name) · 전송 완료"; self.progress=1; self.session=nil;if m.clipboard==true{if let destination{self.imageReceived?(destination,m.clipTime ?? 0);try? FileManager.default.removeItem(at:destination)};if let source{try? FileManager.default.removeItem(at:source)}}else{self.onCompletion?(true)};self.signalIdle() }
             } catch {
                 if let temporary { try? FileManager.default.removeItem(at:temporary) }
-                DispatchQueue.main.async { guard let self, !task.cancelled else { return }; self.busy=false; self.meta=nil; self.source=nil; self.incoming=nil; self.summary=error.localizedDescription; self.progress=0; self.session=nil;if m.clipboard != true{self.onCompletion?(false)} }
+                DispatchQueue.main.async { guard let self, !task.cancelled else { return }; self.busy=false; self.meta=nil; self.source=nil; self.incoming=nil; self.summary=error.localizedDescription; self.progress=0; self.session=nil;if m.clipboard != true{self.onCompletion?(false)};self.signalIdle() }
             }
             task.finish()
         }

@@ -62,7 +62,7 @@ final class DashboardModel: ObservableObject {
             value.mediaChanged={ [weak self] in self?.photos.changed() }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
             value.filesystemMessage={ [weak self] message in self?.explorer.handle(message) }
-            explorer.files=files; explorer.connected={ [weak value] in value?.authenticated ?? false }; explorer.send={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
+            files.onIdle={ [weak self] in self?.explorer.resumePromises() };explorer.files=files; explorer.connected={ [weak value] in value?.authenticated ?? false }; explorer.send={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.sendControl={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.key={ [weak value] in value?.key ?? Data() }; files.connected={ [weak value] in value?.authenticated ?? false }
             value.imageCopied={ [weak self] url,time in self?.files.stage(url,folder:nil,clipboard:true,clipTime:time) }

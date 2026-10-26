@@ -135,14 +135,14 @@ final class PhotosModel:ObservableObject {
     func configure(identity:Data){
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();originals.cancelAll();thumbnails.close();thumbnails.clear();closePreview()
         disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true }
-        originals.thumbnails=thumbnails;originals.key={ [weak self] in self?.thumbnails.key?() ?? Data() };originals.progress={ [weak self] owner,value in guard let self else{return};self.originalProgress=value;if owner=="preview"{self.previewPhase="원본을 가져오는 중 · \(Int(value*100))%"}}
+        originals.thumbnails=thumbnails;originals.cacheTarget={ [weak self] item in self?.disk?.originalURL(item) };originals.key={ [weak self] in self?.thumbnails.key?() ?? Data() };originals.progress={ [weak self] owner,value in guard let self else{return};self.originalProgress=value;if owner=="preview"{self.previewPhase="원본을 가져오는 중 · \(Int(value*100))%"}}
         pendingDeletes=disk?.pending ?? [];loading=false;caching=false;deletingIDs=[]
         albums=disk?.catalog.albums ?? [];applyView();refreshCacheUsage()
     }
     func appear(){visible=true;applyView();reload()}
     func disappear(){visible=false;closePreview();thumbnails.close(closeRemote:!caching)}
     func choose(_ scope:String="all",album:String=""){self.scope=scope;self.album=album;selection=[];search="";closePreview();applyView()}
-    private func applyView(){
+    private func applyView(preservePreview:Bool=false){
         let pending=Set(pendingDeletes.map{$0.item.cacheIdentity})
         var rows=(disk?.catalog.items ?? []).filter{!pending.contains($0.cacheIdentity) && (album.isEmpty || $0.album==album) && (scope != "videos" || $0.video) && (scope != "favorites" || $0.favorite) && (scope != "screenshots" || $0.album.localizedCaseInsensitiveContains("screenshot"))}
         rows.sort{a,b in
@@ -152,7 +152,7 @@ final class PhotosModel:ObservableObject {
             if let x=Int64(a.id),let y=Int64(b.id),x != y{return ascending ? x<y:x>y}
             return a.path.localizedStandardCompare(b.path) == .orderedAscending
         }
-        if let preview,!rows.contains(where:{$0.cacheIdentity==preview.cacheIdentity}){closePreview()}
+        if !preservePreview,let preview,!rows.contains(where:{$0.cacheIdentity==preview.cacheIdentity}){closePreview()}
         items=rows;albums=disk?.catalog.albums ?? [];total=rows.count;selection.formIntersection(Set(rows.map{$0.path}));revision+=1
         status=connected?()==true ? "\(rows.filter{!$0.video}.count)장의 사진, \(rows.filter{$0.video}.count)개의 비디오":"Mac에 저장된 목록 · 오프라인"
         if !pendingDeletes.isEmpty{status += " · 삭제 대기 \(pendingDeletes.count)개"}
@@ -308,8 +308,15 @@ final class PhotosModel:ObservableObject {
         guard !FileManager.default.fileExists(atPath:target.path)else{completion(NSError(domain:"CoolSync",code:2,userInfo:[NSLocalizedDescriptionKey:"같은 이름의 파일이 있습니다. 다른 저장 위치를 선택하세요."]));return}
         if let source=disk?.original(item){DispatchQueue.global(qos:.utility).async{let failure:Error?;do{try FileManager.default.copyItem(at:source,to:target);if item.modified>0{try FileManager.default.setAttributes([.modificationDate:Date(timeIntervalSince1970:Double(item.modified)/1000)],ofItemAtPath:target.path)};failure=nil}catch{failure=error};DispatchQueue.main.async{completion(failure)}};return}
         guard connected?()==true else{completion(NSError(domain:"CoolSync",code:1,userInfo:[NSLocalizedDescriptionKey:"이 원본은 Mac에 보관되지 않았습니다. 휴대폰을 연결하세요."]));return}
-        originals.download(item,to:target,owner:"export."+UUID().uuidString,completion:completion)
+        originals.download(item,to:target,owner:"export."+UUID().uuidString){[weak self]result in
+            switch result{case .success(let receipt):do{try self?.rememberOriginal(receipt.item);completion(nil)}catch{completion(error)};case .failure(let error):completion(error)}
+        }
     }
+    private func rememberOriginal(_ item:PhotoItem)throws{
+        guard let disk else{return};var catalog=disk.catalog
+        if let index=catalog.items.firstIndex(where:{$0.id==item.id}),catalog.items[index] != item{let old=catalog.items[index];catalog.items[index]=item;try disk.commit(catalog);if old.cacheIdentity != item.cacheIdentity{try disk.discard(old,trashOriginal:false)};applyView(preservePreview:true)}
+    }
+
     func isCached(_ item:PhotoItem)->Bool{disk?.original(item,touch:false) != nil}
     func cacheSelection(){
         guard connected?()==true,!caching else{error="휴대폰 연결과 원본 보관 상태를 확인하세요";return}
@@ -321,8 +328,15 @@ final class PhotosModel:ObservableObject {
         guard let item=remaining.first else{caching=false;disk.protected=Set(preview.map{[disk.originalURL($0)]} ?? []);disk.prune();refreshCacheUsage();status="선택한 원본 보관 완료 · 오래된 캐시는 용량 한도에 따라 정리됩니다";return}
         guard connected?()==true else{caching=false;return};status="원본 보관 중 · \(item.name)"
         let target=disk.originalURL(item);disk.protected=[target]
-        originals.download(item,to:target,owner:"cache"){[weak self]error in guard let self,self.cacheGeneration==generation,self.disk===disk else{return};if let error{self.caching=false;disk.protected=Set(self.preview.map{[disk.originalURL($0)]} ?? []);disk.prune();self.error=error.localizedDescription;return};disk.touch(target);disk.prune(excluding:Set([target]+(self.preview.map{[disk.originalURL($0)]} ?? [])));self.cacheNext(Array(remaining.dropFirst()),generation:generation)}
+        originals.download(item,to:target,owner:"cache"){[weak self]result in
+            guard let self,self.cacheGeneration==generation,self.disk===disk else{return}
+            switch result{
+            case .failure(let error):self.caching=false;disk.protected=Set(self.preview.map{[disk.originalURL($0)]} ?? []);disk.prune();self.error=error.localizedDescription
+            case .success(let receipt):do{try self.rememberOriginal(receipt.item);disk.touch(receipt.url);disk.protected=[receipt.url];disk.prune(excluding:[receipt.url]);self.cacheNext(Array(remaining.dropFirst()),generation:generation)}catch{self.caching=false;self.error=error.localizedDescription}
+            }
+        }
     }
+
     func cancelCache(){cacheGeneration=UUID();caching=false;originals.cancel(owner:"cache");disk?.protected=Set(preview.flatMap{item in disk.map{[$0.originalURL(item),$0.motionURL(item)]}} ?? []);disk?.prune();refreshCacheUsage();status="원본 보관을 취소했습니다"}
     var sortTitle:String{(scope=="recent" || sortKey=="added" ? "추가일":"촬영일")+" · "+(ascending ? "오래된순":"최신순")}
     func refreshCacheUsage(){guard let disk else{return};cacheSummary=ByteCountFormatter.string(fromByteCount:disk.bytes,countStyle:.file)+" / "+ByteCountFormatter.string(fromByteCount:disk.budget,countStyle:.file)}
@@ -338,8 +352,15 @@ final class PhotosModel:ObservableObject {
         guard connected?()==true else{previewLoading=false;previewError="이 원본은 Mac에 보관되지 않았습니다. 휴대폰 연결 후 열거나 ‘선택 원본 보관’을 사용하세요.";return}
         let target=disk.originalURL(item);disk.protected=[target]
         let generation=previewGeneration
-        originals.download(item,to:target,owner:"preview"){[weak self]error in guard let self,self.previewGeneration==generation,self.preview?.path==item.path,self.disk===disk else{return};if let error{self.previewLoading=false;self.previewError=error.localizedDescription}else{disk.touch(target);disk.prune(excluding:[target]);self.refreshCacheUsage();self.show(item,url:target)}}
+        originals.download(item,to:target,owner:"preview"){[weak self]result in
+            guard let self,self.previewGeneration==generation,self.preview?.path==item.path,self.disk===disk else{return}
+            switch result{
+            case .failure(let error):self.previewLoading=false;self.previewError=error.localizedDescription
+            case .success(let receipt):do{try self.rememberOriginal(receipt.item);self.preview=receipt.item;disk.touch(receipt.url);disk.protected=[receipt.url];disk.prune(excluding:[receipt.url]);self.refreshCacheUsage();self.show(receipt.item,url:receipt.url)}catch{self.previewLoading=false;self.previewError=error.localizedDescription}
+            }
+        }
     }
+
     private func show(_ item:PhotoItem,url:URL){
         previewLoading=false;let generation=previewGeneration
         if item.video{

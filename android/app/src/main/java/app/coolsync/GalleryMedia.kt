@@ -100,6 +100,15 @@ object GalleryMedia {
    else->throw StorageFault("operation","지원하지 않는 사진 작업입니다")
   }
  }
+ fun originalInfo(c:Context,path:String,id:String):JSONObject{
+  val file=file(c,path)
+  val known=items(c).firstOrNull{it.path==path&&it.id.toString()==id} ?: throw StorageFault("missing","사진을 찾지 못했습니다")
+  var generation=known.generation
+  c.contentResolver.query(MediaStore.Files.getContentUri("external"),arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.MediaColumns.GENERATION_MODIFIED),"_data=? AND is_trashed=0",arrayOf(file.path),null)?.use{cursor->if(!cursor.moveToFirst()||cursor.getLong(0).toString()!=id)throw StorageFault("missing","사진 식별자가 변경되었습니다");generation=cursor.getLong(1)}
+  val capture=CaptureDates.read(c,file,known.mime)
+  val current=known.copy(size=file.length(),modified=(file.lastModified()/1000)*1000,generation=generation,date=if(capture.time>0)capture.time else known.date,dateSource=if(capture.time>0)capture.source else known.dateSource)
+  CaptureDates.flush(c);return current.json(favorites(c))
+ }
  private fun alignDates(c:Context,q:JSONObject,out:JSONObject){
   val requested=q.getJSONArray("items");if(requested.length() !in 1..20)throw StorageFault("selection","한 번에 20개 이하를 선택하세요")
   val current=items(c).associateBy{it.path};val result=JSONArray();val changed=mutableListOf<String>();val history=c.getSharedPreferences("capture-date-history",0)
