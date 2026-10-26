@@ -26,6 +26,7 @@ class SyncService : Service() {
     private var pendingHello:JSONObject?=null
     private var handshakeAck=""
     var notificationResult="아직 테스트하지 않았습니다";private set
+    private val notificationIconsSent=HashSet<String>()
     private var testNotificationID=""
     private val notificationTimeout=Runnable{if(testNotificationID.isNotEmpty()){testNotificationID="";notificationResult="Mac의 알림 수신 확인이 없습니다. 연결 상태를 확인하세요";update(notificationResult)}}
     private var handshakeStage = "Bluetooth 연결"
@@ -159,6 +160,12 @@ class SyncService : Service() {
     fun sendControl(type: String, text: String = "", ref: String = "") {
         main.post { if(authenticated) send(Protocol.message(type,text,ref)) }
     }
+    fun sendPhoneNotification(packageName:String,app:String,title:String,body:String,icon:String){main.post{
+        if(!authenticated)return@post
+        val payload=JSONObject().put("package",packageName).put("app",app).put("title",title).put("body",body)
+        if(icon.isNotEmpty() && notificationIconsSent.add(packageName))payload.put("icon",icon)
+        send(Protocol.message("phoneNotification",payload.toString()))
+    }}
     fun testNotification(){main.post{
         if(!authenticated)return@post
         val text=JSONObject().put("app","CoolSync").put("title","푸시 알림 테스트").put("body","휴대폰에서 보낸 테스트 알림입니다.").toString()
@@ -262,7 +269,7 @@ class SyncService : Service() {
         GalleryServer.close()
         peer = null; authenticated = false;connecting=false; subscribed = false; pendingHello=null;handshakeAck=""; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null
-        main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout);main.removeCallbacks(notificationTimeout);if(testNotificationID.isNotEmpty()){testNotificationID="";notificationResult="연결이 끊겨 테스트를 완료하지 못했습니다"}
+        notificationIconsSent.clear();main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout);main.removeCallbacks(notificationTimeout);if(testNotificationID.isNotEmpty()){testNotificationID="";notificationResult="연결이 끊겨 테스트를 완료하지 못했습니다"}
     }
     private fun closeBle() {
         bleGeneration++

@@ -7,6 +7,7 @@ import org.json.JSONObject
 
 /** Event-driven forwarding. No history, polling, or notification-content logging. */
 class PhoneNotifications : NotificationListenerService() {
+    private val icons = android.util.LruCache<String,String>(32)
     private val recent = LinkedHashMap<String, String>()
     override fun onNotificationPosted(item: StatusBarNotification?) {
         item ?: return
@@ -23,8 +24,21 @@ class PhoneNotifications : NotificationListenerService() {
         recent[item.key] = signature
         while (recent.size > 100) recent.remove(recent.keys.first())
         val app = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(item.packageName, 0)).toString() }.getOrDefault(item.packageName)
-        sync.sendControl("phoneNotification", JSONObject().put("app", app.take(100)).put("title", title).put("body", text).toString())
+        val icon=icons.get(item.packageName) ?: appIcon(item.packageName).also{icons.put(item.packageName,it)}
+        sync.sendPhoneNotification(item.packageName,app.take(100),title,text,icon)
     }
+    private fun appIcon(packageName:String):String = runCatching {
+        val drawable=packageManager.getApplicationIcon(packageName)
+        for(size in intArrayOf(48,32,24)) {
+            val bitmap=android.graphics.Bitmap.createBitmap(size,size,android.graphics.Bitmap.Config.ARGB_8888)
+            val previous=android.graphics.Rect(drawable.bounds)
+            drawable.setBounds(0,0,size,size);drawable.draw(android.graphics.Canvas(bitmap));drawable.bounds=previous
+            val bytes=java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,bytes);bitmap.recycle()
+            if(bytes.size()<=4096)return@runCatching android.util.Base64.encodeToString(bytes.toByteArray(),android.util.Base64.NO_WRAP)
+        }
+        ""
+    }.getOrDefault("")
     override fun onNotificationRemoved(item: StatusBarNotification?) { item?.let { recent.remove(it.key) } }
     override fun onListenerConnected() { recent.clear() }
     override fun onListenerDisconnected() {

@@ -38,13 +38,19 @@ final class DashboardModel: ObservableObject {
                 if value.authenticated { self.pairing=false; if !wasConnected { self.refreshNotificationPermission();self.tab=1; self.explorer.reload() } }
             }
             photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.error=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
-            value.phoneNotification={ [weak self] app,title,body,finished in
+            value.phoneNotification={ [weak self] app,title,body,package,icon,finished in
+                PhoneNotificationIcons.shared.cache(package:package,encodedIcon:icon)
                 func result(_ text:String){DispatchQueue.main.async{self?.notificationStatus=text};finished(text)}
                 guard UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true else { result("Mac CoolSync 설정에서 휴대폰 알림 표시가 꺼져 있습니다");return }
                 let center=UNUserNotificationCenter.current()
                 let content=UNMutableNotificationContent();content.title=app;content.subtitle=title;content.body=body;content.sound = .default
                 content.threadIdentifier="phone."+app;content.userInfo=["kind":"phoneNotification"]
-                func deliver(){center.add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil)){error in result(error.map{"Mac 알림 등록 실패 · "+$0.localizedDescription} ?? "Mac 알림 센터에 등록했습니다")}}
+                func deliver(){
+                    let cleanup=PhoneNotificationIcons.shared.decorate(content,package:package)
+                    center.add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil)){error in
+                        cleanup();result(error.map{"Mac 알림 등록 실패 · "+$0.localizedDescription} ?? "Mac 알림 센터에 등록했습니다")
+                    }
+                }
                 center.getNotificationSettings{settings in
                     if settings.authorizationStatus == .notDetermined {
                         center.requestAuthorization(options:[.alert,.sound]){allowed,error in if allowed{deliver()}else{result("Mac 알림 권한이 허용되지 않았습니다. 시스템 설정 → 알림 → CoolSync에서 허용하세요")}}
