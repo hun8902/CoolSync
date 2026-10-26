@@ -49,6 +49,8 @@ class MainActivity:Activity() {
     override fun onResume(){
         super.onResume()
         AppUpdates.resume(this)
+        if(prefs.getBoolean("forwardNotifications",false) && notificationAccess())
+            android.service.notification.NotificationListenerService.requestRebind(ComponentName(this,PhoneNotifications::class.java))
         if(!observed){if(Build.VERSION.SDK_INT>=33)registerReceiver(receiver,IntentFilter(SyncService.STATE),RECEIVER_NOT_EXPORTED)else registerReceiver(receiver,IntentFilter(SyncService.STATE),"$packageName.INTERNAL",null);observed=true}
         AppUpdates.changed={if(!isFinishing)render()};AppUpdates.automatic(this)
         render();refreshWizard()
@@ -257,7 +259,7 @@ class MainActivity:Activity() {
                     if(sync?.authenticated!=true)toast("Mac에 연결한 뒤 테스트해 주세요")
                     else sync.testNotification()
                 })
-                alerts.addView(label("휴대폰이 잠겨 있으면 내용을 보내지 않습니다. Mac에서도 알림 권한을 허용하세요.",12f,secondary).apply{setPadding(0,dp(8),0,dp(12))})
+                alerts.addView(label("휴대폰이 잠겨 있어도 새 앱 알림을 Mac으로 보냅니다. Mac 시스템 설정에서도 CoolSync 알림을 허용하세요.",12f,secondary).apply{setPadding(0,dp(8),0,dp(12))})
                 val unlink=group(deviceSettings,"등록된 Mac")
                 row(unlink,"다른 Mac 연결","›",action={manualKey()})
                 row(unlink,"등록 해제","›","저장된 연결 정보를 삭제합니다.",action={confirmUnlink()})

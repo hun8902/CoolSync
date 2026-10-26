@@ -12,9 +12,8 @@ class PhoneNotifications : NotificationListenerService() {
         item ?: return
         val sync = SyncService.active ?: return
         if (!getSharedPreferences("sync", 0).getBoolean("forwardNotifications", false) || !sync.authenticated || item.packageName == packageName) return
-        val original = item.notification
-        if(original.visibility == Notification.VISIBILITY_SECRET) return
-        val notification = if(sync.locked() && original.visibility == Notification.VISIBILITY_PRIVATE) original.publicVersion ?: return else original
+        // Notification access and the sharing toggle authorize forwarding even while locked.
+        val notification = item.notification
         if (notification.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_GROUP_SUMMARY) != 0) return
         val title = notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.take(160) ?: ""
         val text = (notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: notification.extras.getCharSequence(Notification.EXTRA_TEXT))?.toString()?.take(1200) ?: ""
@@ -27,5 +26,10 @@ class PhoneNotifications : NotificationListenerService() {
         sync.sendControl("phoneNotification", JSONObject().put("app", app.take(100)).put("title", title).put("body", text).toString())
     }
     override fun onNotificationRemoved(item: StatusBarNotification?) { item?.let { recent.remove(it.key) } }
-    override fun onListenerDisconnected() { recent.clear() }
+    override fun onListenerConnected() { recent.clear() }
+    override fun onListenerDisconnected() {
+        recent.clear()
+        if(getSharedPreferences("sync",0).getBoolean("forwardNotifications",false))
+            requestRebind(android.content.ComponentName(this,PhoneNotifications::class.java))
+    }
 }

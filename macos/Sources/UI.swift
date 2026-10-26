@@ -11,6 +11,7 @@ final class DashboardModel: ObservableObject {
     @Published var connected=false
     @Published var connecting=false
     @Published var notificationStatus="아직 수신한 알림이 없습니다"
+    @Published var notificationPermissionIssue=""
     @Published var name="연결된 휴대폰 없음"
     @Published var model=""
     @Published var system=""
@@ -34,7 +35,7 @@ final class DashboardModel: ObservableObject {
             value.changed={ [weak self, weak value] status in
                 guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated;self.connecting=value.connecting; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
                 if wasConnected && !value.authenticated { self.explorer.connectionEnded();self.photos.connectionEnded() }
-                if value.authenticated { self.pairing=false; if !wasConnected { self.tab=1; self.explorer.reload() } }
+                if value.authenticated { self.pairing=false; if !wasConnected { self.refreshNotificationPermission();self.tab=1; self.explorer.reload() } }
             }
             photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.error=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
             value.phoneNotification={ [weak self] app,title,body,finished in
@@ -62,6 +63,16 @@ final class DashboardModel: ObservableObject {
             files.imageReceived={ [weak value] url,time in value?.applyImage(url,time:time) }
             name=value.peerName; model=value.peerModel; pairing=model.isEmpty
         } catch { status="키체인 접근을 허용한 뒤 다시 실행하세요" }
+    }
+    func refreshNotificationPermission() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            let issue:String
+            if settings.authorizationStatus == .denied { issue="macOS에서 CoolSync 알림이 꺼져 있습니다. Mac 알림 설정에서 허용하세요." }
+            else if settings.authorizationStatus == .notDetermined { issue="첫 알림을 받을 때 Mac의 알림 권한을 허용하세요." }
+            else if settings.notificationCenterSetting == .disabled { issue="macOS에서 CoolSync의 알림 센터 표시가 꺼져 있습니다." }
+            else { issue="" }
+            DispatchQueue.main.async { self?.notificationPermissionIssue=issue }
+        }
     }
     var pairURL: String { var url=URLComponents(); url.scheme="coolsync"; url.host="pair"; url.queryItems=[URLQueryItem(name:"key",value:keyHex),URLQueryItem(name:"name",value:Host.current().localizedName ?? "Mac")]; return url.string ?? "" }
     func reset() {
@@ -174,7 +185,7 @@ struct CoolDashboard:View {
             Section("파일 탐색"){Text("휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용해야 합니다.");Text("파일과 폴더는 내부 저장소에서 관리합니다. 다른 앱의 전용 데이터와 시스템 보호 폴더는 접근할 수 없습니다.").foregroundStyle(.secondary)}
             Section("클립보드"){Toggle("복사 기록 저장",isOn:Binding(get:{model.history.enabled},set:{model.history.enabled=$0}));Text("이 기기에 최대 200개를 저장합니다. 민감한 내용 표시는 존중합니다. 이미지 한 장은 같은 로컬 네트워크에서 공유합니다.").foregroundStyle(.secondary)}
             Section("앱 업데이트"){Button("업데이트 확인…"){MacUpdates.shared.check()};Text("새 업데이트를 자동 확인합니다. 다운로드 및 설치 방식은 업데이트 창에서 변경할 수 있습니다.").foregroundStyle(.secondary)}
-            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);LabeledContent("최근 알림 처리",value:model.notificationStatus);Button("Mac 알림 설정 열기"){if let url=URL(string:"x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleId=app.coolsync.mac"){NSWorkspace.shared.open(url)}}}
+            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);LabeledContent("최근 알림 처리",value:model.notificationStatus);if !model.notificationPermissionIssue.isEmpty { Label(model.notificationPermissionIssue,systemImage:"exclamationmark.bubble").foregroundStyle(.orange) };Button("Mac 알림 설정 열기"){if let url=URL(string:"x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleId=app.coolsync.mac"){NSWorkspace.shared.open(url)}}}
             Section{Text("CoolSync 0.3.0 · 빌드 " + (Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "—")).foregroundStyle(.secondary)}
         }.formStyle(.grouped).frame(maxWidth:.infinity)
     }
@@ -278,6 +289,7 @@ final class AppDelegate:NSObject,NSApplicationDelegate,UNUserNotificationCenterD
         UNUserNotificationCenter.current().delegate=self
         NotificationCenter.default.addObserver(self,selector:#selector(incoming(_:)),name:.init("CoolSyncIncomingFile"),object:nil)
     }
+    func applicationDidBecomeActive(_ notification:Notification) { model?.refreshNotificationPermission() }
     @objc private func checkUpdate(){MacUpdates.shared.check()}
     @objc private func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
     @objc private func quit() { model.files.cancel(); model.engine?.shutdown(); NSApp.terminate(nil) }
