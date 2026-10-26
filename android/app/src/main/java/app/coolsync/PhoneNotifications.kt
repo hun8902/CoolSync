@@ -11,8 +11,10 @@ class PhoneNotifications : NotificationListenerService() {
     override fun onNotificationPosted(item: StatusBarNotification?) {
         item ?: return
         val sync = SyncService.active ?: return
-        if (!getSharedPreferences("sync", 0).getBoolean("forwardNotifications", false) || !sync.authenticated || sync.locked() || item.packageName == packageName) return
-        val notification = item.notification
+        if (!getSharedPreferences("sync", 0).getBoolean("forwardNotifications", false) || !sync.authenticated || item.packageName == packageName) return
+        val original = item.notification
+        if(original.visibility == Notification.VISIBILITY_SECRET) return
+        val notification = if(sync.locked() && original.visibility == Notification.VISIBILITY_PRIVATE) original.publicVersion ?: return else original
         if (notification.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_GROUP_SUMMARY) != 0) return
         val title = notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.take(160) ?: ""
         val text = (notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: notification.extras.getCharSequence(Notification.EXTRA_TEXT))?.toString()?.take(1200) ?: ""

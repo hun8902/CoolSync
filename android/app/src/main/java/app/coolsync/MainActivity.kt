@@ -143,11 +143,11 @@ class MainActivity:Activity() {
         if(parent.childCount>0)divider(parent)
         val line=LinearLayout(this);line.gravity=Gravity.CENTER_VERTICAL;line.minimumHeight=dp(48);line.setPadding(0,dp(12),0,dp(12));line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f));val control=GlassToggle(this,checked,blue,changed).apply{contentDescription=title};line.addView(control,LinearLayout.LayoutParams(dp(50),dp(30)).apply{leftMargin=dp(18)});line.setOnClickListener{control.performClick()};parent.addView(line)
     }
-    private fun fingerprint()="${SyncService.active?.authenticated}:${prefs.getString("connectionIssue",null)}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}:${if(selectedTab==1)ClipHistory.revision else 0}"
+    private fun fingerprint()="${SyncService.active?.authenticated}:${SyncService.active?.connecting}:${SyncService.active?.notificationResult}:${prefs.getString("connectionIssue",null)}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}:${if(selectedTab==1)ClipHistory.revision else 0}"
     private fun refreshLive(){
         if(fingerprint()!=liveFingerprint){render();return}
         connectionDetail?.text=connectionText()
-        connectionBadge?.text=if(SyncService.active?.authenticated==true)"연결됨" else "미연결"
+        connectionBadge?.text=if(SyncService.active?.authenticated==true)"연결됨" else if(SyncService.active?.connecting==true)"연결 중…" else "미연결"
         values["진행 상태"]?.text=if(FilesBridge.busy) "${FilesBridge.progress}%" else "대기"
         values["마지막 동기화"]?.text=lastSyncText()
     }
@@ -198,7 +198,7 @@ class MainActivity:Activity() {
                 val device=group(left,"연결 기기")
                 val top=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;setPadding(0,dp(16),0,dp(16))}
                 top.addView(LinkIcon(this,0,blue),LinearLayout.LayoutParams(dp(38),dp(38)))
-                val title=column();title.setPadding(dp(14),0,0,0);title.addView(label(prefs.getString("macName","연결할 Mac") ?: "Mac",20f,ink,true));connectionBadge=label(if(connected)"연결됨"else"미연결",13f,if(connected)0xff248a3d.toInt()else secondary);title.addView(connectionBadge);top.addView(title,LinearLayout.LayoutParams(0,-2,1f));device.addView(top)
+                val title=column();title.setPadding(dp(14),0,0,0);title.addView(label(prefs.getString("macName","연결할 Mac") ?: "Mac",20f,ink,true));connectionBadge=label(if(connected)"연결됨"else if(SyncService.active?.connecting==true)"연결 중…"else"미연결",13f,if(connected)0xff248a3d.toInt()else secondary);title.addView(connectionBadge);top.addView(title,LinearLayout.LayoutParams(0,-2,1f));if(SyncService.active?.connecting==true)top.addView(ProgressBar(this).apply{isIndeterminate=true;indeterminateTintList=android.content.res.ColorStateList.valueOf(blue);contentDescription="Mac 연결 진행 중"},LinearLayout.LayoutParams(dp(26),dp(26)));device.addView(top)
                 connectionDetail=label(connectionText(),15f,secondary);device.addView(connectionDetail);space(device,12)
                 if(Protocol.key(this)==null){button(device,"QR로 Mac 연결"){scanQR()}}else{val actions=LinearLayout(this);device.addView(actions);val start=column();actions.addView(start,LinearLayout.LayoutParams(0,-2,1f));button(start,if(connected)"다시 연결"else"연결하기"){reconnect()};if(prefs.getBoolean("enabled",false)){val stop=column();actions.addView(stop,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(10)});button(stop,"중지",false){pauseConnection()}}}
                 val setup=group(right,"연결 관리")
@@ -250,11 +250,12 @@ class MainActivity:Activity() {
 
                 val alerts=group(appSettings,"알림 공유")
                 toggleRow(alerts,"Mac에 휴대폰 알림 표시",prefs.getBoolean("forwardNotifications",false)){enabled->prefs.edit().putBoolean("forwardNotifications",enabled).apply();if(enabled&&!notificationAccess())notificationSettings()}
+                row(alerts,"최근 알림 처리","",SyncService.active?.notificationResult ?: "Mac 연결 후 테스트할 수 있습니다")
                 row(alerts,"알림 접근 권한",if(notificationAccess())"허용됨"else"설정 필요",action={notificationSettings()})
                 row(alerts,"Mac으로 테스트 알림 보내기","›",action={
                     val sync=SyncService.active
                     if(sync?.authenticated!=true)toast("Mac에 연결한 뒤 테스트해 주세요")
-                    else{val message=org.json.JSONObject().put("app","CoolSync").put("title","푸시 알림 테스트").put("body","휴대폰에서 보낸 테스트 알림입니다.");sync.sendControl("phoneNotification",message.toString());toast("테스트 알림 전송을 요청했습니다")}
+                    else sync.testNotification()
                 })
                 alerts.addView(label("휴대폰이 잠겨 있으면 내용을 보내지 않습니다. Mac에서도 알림 권한을 허용하세요.",12f,secondary).apply{setPadding(0,dp(8),0,dp(12))})
                 val unlink=group(deviceSettings,"등록된 Mac")

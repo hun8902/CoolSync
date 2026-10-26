@@ -24,8 +24,13 @@ class SyncService : Service() {
     private var peer: BluetoothDevice? = null
     private var subscribed = false
     private var pendingHello:JSONObject?=null
+    private var handshakeAck=""
+    var notificationResult="아직 테스트하지 않았습니다";private set
+    private var testNotificationID=""
+    private val notificationTimeout=Runnable{if(testNotificationID.isNotEmpty()){testNotificationID="";notificationResult="Mac의 알림 수신 확인이 없습니다. 연결 상태를 확인하세요";update(notificationResult)}}
     private var handshakeStage = "Bluetooth 연결"
     @Volatile var authenticated = false; private set
+    var connecting=false;private set
     private var mtu = 23
     var status = "시작 중"; private set
     var peerName = "Mac"; private set
@@ -53,10 +58,10 @@ class SyncService : Service() {
     private val waitTimeout = Runnable { if(!authenticated) update("Mac을 찾지 못했습니다 · Mac 앱 실행과 Bluetooth 권한을 확인하고 다시 연결하세요") }
     private val linkTimeout = Runnable { failLink("연결 시간 초과 · $handshakeStage 단계에서 응답이 없습니다") }
     private fun failLink(reason: String) { val d=peer; resetPeer(); update(reason); d?.let { server?.cancelConnection(it) }; advertise() }
-    private fun authProgress(stage: String) { if(authenticated)return; handshakeStage=stage; main.removeCallbacks(linkTimeout); main.postDelayed(linkTimeout,30000); update("Mac 연결 중 · $stage") }
+    private fun authProgress(stage: String) { if(authenticated)return; connecting=true;handshakeStage=stage; main.removeCallbacks(linkTimeout); main.postDelayed(linkTimeout,30000); update("Mac 연결 중 · $stage") }
     private val sendTimeout = Runnable { peer?.let { server?.cancelConnection(it) }; resetPeer(); advertise(); update("연결 복구 대기") }
     private val advert = object : AdvertiseCallback() {
-        override fun onStartSuccess(settings: AdvertiseSettings?) { main.post { if(peer==null && prefs.getString("connectionIssue",null)==null) { update("Mac 연결 대기 · Mac에서 CoolSync를 열어주세요"); main.removeCallbacks(waitTimeout); main.postDelayed(waitTimeout,30000) } } }
+        override fun onStartSuccess(settings: AdvertiseSettings?) { main.post { if(peer==null && prefs.getString("connectionIssue",null)==null) { connecting=true;update("Mac 연결 대기 · Mac에서 CoolSync를 열어주세요"); main.removeCallbacks(waitTimeout); main.postDelayed(waitTimeout,30000) } } }
         override fun onStartFailure(code: Int) { main.post { if (code != ADVERTISE_FAILED_ALREADY_STARTED) update(when(code){ADVERTISE_FAILED_TOO_MANY_ADVERTISERS->"BLE 광고 실패 · 사용 중인 Bluetooth 앱을 닫고 다시 연결하세요";ADVERTISE_FAILED_FEATURE_UNSUPPORTED->"BLE 광고 미지원 · 이 기기의 Bluetooth 기능을 확인하세요";else->"BLE 광고 실패 ($code) · Bluetooth를 껐다 켜고 다시 연결하세요"}) } }
     }
     private val bluetoothReceiver = object : BroadcastReceiver() {
@@ -152,8 +157,13 @@ class SyncService : Service() {
         sendBroadcast(Intent(STATE).setPackage(packageName))
     }
     fun sendControl(type: String, text: String = "", ref: String = "") {
-        if(authenticated) send(Protocol.message(type,text,ref))
+        main.post { if(authenticated) send(Protocol.message(type,text,ref)) }
     }
+    fun testNotification(){main.post{
+        if(!authenticated)return@post
+        val text=JSONObject().put("app","CoolSync").put("title","푸시 알림 테스트").put("body","휴대폰에서 보낸 테스트 알림입니다.").toString()
+        val m=Protocol.message("phoneNotification",text);testNotificationID=m.getString("id");notificationResult="Mac 알림 수신 확인 중…";main.removeCallbacks(notificationTimeout);main.postDelayed(notificationTimeout,20000);send(m);update(notificationResult)
+    }}
     private fun receive(bytes: ByteArray) {
         for(b in bytes) {
             if(b == 10.toByte()) {
@@ -169,12 +179,24 @@ class SyncService : Service() {
         val type = m.getString("type"); val id = m.getString("id")
         if(type=="hello" && !subscribed){pendingHello=m;return}
         if(type == "hello" && subscribed) {
-            authenticated = true; main.removeCallbacks(waitTimeout); main.removeCallbacks(linkTimeout); advertiser?.stopAdvertising(advert)
+            val confirm = runCatching { JSONObject(m.optString("text")).optBoolean("confirm") }.getOrDefault(false)
+            authenticated = false; main.removeCallbacks(waitTimeout); authProgress("Mac의 최종 연결 확인 대기")
             peerName = try { JSONObject(m.optString("text")).optString("name","Mac").take(80) } catch (_: Exception) { "Mac" }
-            val info = JSONObject().put("mtu",(mtu-3).coerceIn(20,180)).put("name", runCatching { android.provider.Settings.Global.getString(contentResolver,"device_name") }.getOrNull() ?: Build.MODEL).put("model",Build.MODEL).put("android",Build.VERSION.RELEASE)
-            send(Protocol.message("helloAck",text=info.toString(),ref=id)); update("Mac 연결됨 · 복사 대기"); return
+            val info = JSONObject().put("mtu",(mtu-3).coerceIn(20,180)).put("name", runCatching { android.provider.Settings.Global.getString(contentResolver,"device_name") }.getOrNull() ?: Build.MODEL).put("model",Build.MODEL).put("android",Build.VERSION.RELEASE).put("confirm",confirm)
+            val ack=Protocol.message("helloAck",text=info.toString(),ref=id);handshakeAck=ack.getString("id");send(ack)
+            if(!confirm){authenticated=true;connecting=false;main.removeCallbacks(linkTimeout);advertiser?.stopAdvertising(advert);update("Mac 연결됨 · 복사 대기")}
+            return
+        }
+        if(type=="ready" && handshakeAck.isNotEmpty() && m.optString("ref")==handshakeAck){
+            authenticated=true;connecting=false;main.removeCallbacks(linkTimeout);main.removeCallbacks(waitTimeout);advertiser?.stopAdvertising(advert)
+            send(Protocol.message("readyAck",ref=id));update("Mac 연결됨 · 복사 대기");return
         }
         if(!authenticated) return
+        if(type=="notificationAck"){
+            notificationResult=m.optString("text","Mac 알림 처리 결과 없음")
+            if(m.optString("ref")==testNotificationID){testNotificationID="";main.removeCallbacks(notificationTimeout)}
+            update(notificationResult);return
+        }
         if(type=="fsRequest") { StorageBridge.handle(this,m); return }
         if(type.startsWith("file")) { FilesBridge.handle(this,m); return }
         if(type == "ack" && m.optString("ref") == pending?.optString("id")) {
@@ -238,9 +260,9 @@ class SyncService : Service() {
     }
     private fun resetPeer() {
         GalleryServer.close()
-        peer = null; authenticated = false; subscribed = false; pendingHello=null; mtu = 23; pending = null
+        peer = null; authenticated = false;connecting=false; subscribed = false; pendingHello=null;handshakeAck=""; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null
-        main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout)
+        main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout);main.removeCallbacks(notificationTimeout);if(testNotificationID.isNotEmpty()){testNotificationID="";notificationResult="연결이 끊겨 테스트를 완료하지 못했습니다"}
     }
     private fun closeBle() {
         bleGeneration++

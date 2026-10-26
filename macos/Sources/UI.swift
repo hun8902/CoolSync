@@ -9,6 +9,8 @@ final class DashboardModel: ObservableObject {
     @Published var connectionIssue=""
     @Published var showConnectionIssue=false
     @Published var connected=false
+    @Published var connecting=false
+    @Published var notificationStatus="아직 수신한 알림이 없습니다"
     @Published var name="연결된 휴대폰 없음"
     @Published var model=""
     @Published var system=""
@@ -30,22 +32,24 @@ final class DashboardModel: ObservableObject {
             let key=try KeyStore.load(); keyHex=key.map{String(format:"%02x",$0)}.joined()
             let value=SyncEngine(key:key); engine=value
             value.changed={ [weak self, weak value] status in
-                guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
+                guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated;self.connecting=value.connecting; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
                 if wasConnected && !value.authenticated { self.explorer.connectionEnded();self.photos.connectionEnded() }
                 if value.authenticated { self.pairing=false; if !wasConnected { self.tab=1; self.explorer.reload() } }
             }
             photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.error=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
-            value.phoneNotification={ app,title,body in
-                guard UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true else { return }
+            value.phoneNotification={ [weak self] app,title,body,finished in
+                func result(_ text:String){DispatchQueue.main.async{self?.notificationStatus=text};finished(text)}
+                guard UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true else { result("Mac CoolSync 설정에서 휴대폰 알림 표시가 꺼져 있습니다");return }
                 let center=UNUserNotificationCenter.current()
-                let content=UNMutableNotificationContent();content.title=app;content.subtitle=title;content.body=body
-                content.threadIdentifier="phone."+app
-                content.userInfo=["kind":"phoneNotification"]
-                func deliver(){center.add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil))}
+                let content=UNMutableNotificationContent();content.title=app;content.subtitle=title;content.body=body;content.sound = .default
+                content.threadIdentifier="phone."+app;content.userInfo=["kind":"phoneNotification"]
+                func deliver(){center.add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil)){error in result(error.map{"Mac 알림 등록 실패 · "+$0.localizedDescription} ?? "Mac 알림 센터에 등록했습니다")}}
                 center.getNotificationSettings{settings in
                     if settings.authorizationStatus == .notDetermined {
-                        center.requestAuthorization(options:[.alert,.sound]){allowed,_ in if allowed { deliver() }}
-                    } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional { deliver() }
+                        center.requestAuthorization(options:[.alert,.sound]){allowed,error in if allowed{deliver()}else{result("Mac 알림 권한이 허용되지 않았습니다. 시스템 설정 → 알림 → CoolSync에서 허용하세요")}}
+                    } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
+                        if settings.notificationCenterSetting == .disabled { result("Mac 시스템 설정 → 알림 → CoolSync에서 알림 센터 표시를 켜세요") }else{deliver()}
+                    } else { result("Mac 알림 권한이 거부되어 있습니다. 시스템 설정 → 알림 → CoolSync에서 허용하세요") }
                 }
             }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
@@ -75,7 +79,7 @@ struct CoolDashboard:View {
         HStack(spacing:0){
             if model.tab != 4 {
                 VStack(spacing:0) {
-                    HStack(spacing:10){Image(systemName:"iphone.gen3").font(.title2).foregroundStyle(.blue);VStack(alignment:.leading,spacing:4){Text(model.name).font(.headline).lineLimit(2);Text(model.connected ? "연결됨":"미연결").font(.caption).foregroundStyle(model.connected ? .green:.secondary)};Spacer()}.padding(18)
+                    HStack(spacing:10){Image(systemName:"iphone.gen3").font(.title2).foregroundStyle(.blue);VStack(alignment:.leading,spacing:4){Text(model.name).font(.headline).lineLimit(2);Text(model.connected ? "연결됨":model.connecting ? "연결 중…":"미연결").font(.caption).foregroundStyle(model.connected ? .green:.secondary)};Spacer()}.padding(18)
                     List(selection:sidebarSelection) {
                         Section("CoolSync") {
                             Label("연결",systemImage:"link").tag("connection")
@@ -137,7 +141,7 @@ struct CoolDashboard:View {
                             }
                         }
                         Divider()
-                        Text(model.status).font(.callout).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
+                        HStack(spacing:10){if model.connecting{ProgressView().controlSize(.small)};Text(model.status)}.font(.callout).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
                         if !model.model.isEmpty { detail("모델",model.model) }
                         if !model.system.isEmpty { detail("Android",model.system) }
                         detail("마지막 복사",model.lastSync.map{DateFormatter.localizedString(from:$0,dateStyle:.none,timeStyle:.short)} ?? "아직 없음")
@@ -170,7 +174,7 @@ struct CoolDashboard:View {
             Section("파일 탐색"){Text("휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용해야 합니다.");Text("파일과 폴더는 내부 저장소에서 관리합니다. 다른 앱의 전용 데이터와 시스템 보호 폴더는 접근할 수 없습니다.").foregroundStyle(.secondary)}
             Section("클립보드"){Toggle("복사 기록 저장",isOn:Binding(get:{model.history.enabled},set:{model.history.enabled=$0}));Text("이 기기에 최대 200개를 저장합니다. 민감한 내용 표시는 존중합니다. 이미지 한 장은 같은 로컬 네트워크에서 공유합니다.").foregroundStyle(.secondary)}
             Section("앱 업데이트"){Button("업데이트 확인…"){MacUpdates.shared.check()};Text("새 업데이트를 자동 확인합니다. 다운로드 및 설치 방식은 업데이트 창에서 변경할 수 있습니다.").foregroundStyle(.secondary)}
-            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);Button("Mac 알림 허용"){UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]){_,_ in}}}
+            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);LabeledContent("최근 알림 처리",value:model.notificationStatus);Button("Mac 알림 설정 열기"){if let url=URL(string:"x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleId=app.coolsync.mac"){NSWorkspace.shared.open(url)}}}
             Section{Text("CoolSync 0.3.0 · 빌드 " + (Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "—")).foregroundStyle(.secondary)}
         }.formStyle(.grouped).frame(maxWidth:.infinity)
     }
