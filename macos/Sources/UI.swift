@@ -37,8 +37,16 @@ final class DashboardModel: ObservableObject {
             photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.error=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
             value.phoneNotification={ app,title,body in
                 guard UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true else { return }
+                let center=UNUserNotificationCenter.current()
                 let content=UNMutableNotificationContent();content.title=app;content.subtitle=title;content.body=body
-                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil))
+                content.threadIdentifier="phone."+app
+                content.userInfo=["kind":"phoneNotification"]
+                func deliver(){center.add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil))}
+                center.getNotificationSettings{settings in
+                    if settings.authorizationStatus == .notDetermined {
+                        center.requestAuthorization(options:[.alert,.sound]){allowed,_ in if allowed { deliver() }}
+                    } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional { deliver() }
+                }
             }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
             value.filesystemMessage={ [weak self] message in self?.explorer.handle(message) }
@@ -162,7 +170,7 @@ struct CoolDashboard:View {
             Section("파일 탐색"){Text("휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용해야 합니다.");Text("파일과 폴더는 내부 저장소에서 관리합니다. 다른 앱의 전용 데이터와 시스템 보호 폴더는 접근할 수 없습니다.").foregroundStyle(.secondary)}
             Section("클립보드"){Toggle("복사 기록 저장",isOn:Binding(get:{model.history.enabled},set:{model.history.enabled=$0}));Text("이 기기에 최대 200개를 저장합니다. 민감한 내용 표시는 존중합니다. 이미지 한 장은 같은 로컬 네트워크에서 공유합니다.").foregroundStyle(.secondary)}
             Section("앱 업데이트"){Button("업데이트 확인…"){MacUpdates.shared.check()};Text("새 업데이트를 자동 확인합니다. 다운로드 및 설치 방식은 업데이트 창에서 변경할 수 있습니다.").foregroundStyle(.secondary)}
-            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);Button("파일 수신 알림 허용"){UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]){_,_ in}}}
+            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);Button("Mac 알림 허용"){UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]){_,_ in}}}
             Section{Text("CoolSync 0.3.0 · 빌드 " + (Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "—")).foregroundStyle(.secondary)}
         }.formStyle(.grouped).frame(maxWidth:.infinity)
     }
@@ -287,7 +295,7 @@ final class AppDelegate:NSObject,NSApplicationDelegate,UNUserNotificationCenterD
             else { DispatchQueue.main.async { self?.show() } }
         }
     }
-    func userNotificationCenter(_ center:UNUserNotificationCenter,willPresent notification:UNNotification,withCompletionHandler completionHandler:@escaping(UNNotificationPresentationOptions)->Void) { completionHandler([.banner,.sound]) }
-    func userNotificationCenter(_ center:UNUserNotificationCenter,didReceive response:UNNotificationResponse,withCompletionHandler completionHandler:@escaping()->Void) { model.tab=1; show(); completionHandler() }
+    func userNotificationCenter(_ center:UNUserNotificationCenter,willPresent notification:UNNotification,withCompletionHandler completionHandler:@escaping(UNNotificationPresentationOptions)->Void) { completionHandler([.banner,.list,.sound]) }
+    func userNotificationCenter(_ center:UNUserNotificationCenter,didReceive response:UNNotificationResponse,withCompletionHandler completionHandler:@escaping()->Void) { model.tab=response.notification.request.content.userInfo["kind"] as? String == "phoneNotification" ? 0:1; show(); completionHandler() }
     func applicationWillTerminate(_ notification:Notification) { model.files.cancel(); model.engine?.shutdown() }
 }
