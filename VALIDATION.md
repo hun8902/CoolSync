@@ -30,3 +30,12 @@ Mac 앱은 개인용 ad-hoc 서명이며 Apple 공증은 받지 않았다. Andro
 ## 입력창 및 탐색 구조 수정
 
 버전은 유지했다. 새 작업 경로에서 Android assembleDebug/lintDebug 및 Mac 빌드를 통과했다. Android 에뮬레이터에서 네 탭 전환, 입력창 열기·취소, 잘못된 키의 인라인 오류와 창 유지, 가로 화면, 연결 진단 창, 프로세스 생존 검사를 통과했다. 실제 스크린샷은 design/previews/android-connection.png, android-pairing.png, android-input-error.png, android-pairing-landscape.png, android-diagnostics.png이다. Mac 탐색기 RPC 회귀 검사도 통과했다. 실제 기기 무선 연결의 실패 원인은 미확정이다.
+
+## GitHub automatic updates (2026-10-26)
+
+- Public repository: https://github.com/hun8902/CoolSync
+- GitHub Actions run 40258293361: Android release build/lint, macOS build/explorer RPC, signed metadata and release publishing all succeeded.
+- Published release: build-1002. Display version remains 0.3.0; internal build is 1002.
+- Downloaded the actual release assets and verified Android APK/metadata signatures, Mac package signature, embedded public key/build and Sparkle Ed25519 archive signature. Tampered signature inputs were rejected.
+- A disposable Android emulator running build 4 fetched the real GitHub feed, downloaded the APK, verified it and opened the system installer. Play Protect scan passed; installation advanced to build 1002 and cold launch survived.
+- The user's physical phone and installed Mac app were not replaced. A full Mac in-place Sparkle replacement has not been tested.
