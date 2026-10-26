@@ -135,7 +135,7 @@ class MainActivity:Activity() {
     private fun row(parent:LinearLayout,title:String,value:String,detail:String?=null,action:(()->Unit)?=null){
         if(parent.childCount>0)divider(parent)
         val row=column();row.minimumHeight=dp(48);row.gravity=Gravity.CENTER_VERTICAL;row.setPadding(0,dp(12),0,dp(12));val line=LinearLayout(this);line.gravity=Gravity.CENTER_VERTICAL;line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f))
-        val valueView=label(if(value=="›")""else value.replace(" ›",""),14f,secondary);values[title]=valueView;line.addView(valueView)
+        val valueView=label(if(value=="›")""else value.replace(" ›",""),14f,secondary).apply{maxWidth=dp(160);maxLines=2;gravity=Gravity.END;ellipsize=android.text.TextUtils.TruncateAt.END};values[title]=valueView;line.addView(valueView)
         if(action!=null)line.addView(Chevron(this,secondary),LinearLayout.LayoutParams(dp(16),dp(18)).apply{leftMargin=dp(10)})
         row.addView(line);if(detail!=null){space(row,5);val detailView=label(detail,13f,secondary);details[title]=detailView;row.addView(detailView)};if(action!=null)interactive(row,action);parent.addView(row)
     }
@@ -166,6 +166,13 @@ class MainActivity:Activity() {
     private fun pauseConnection(){autoConnect=false;prefs.edit().putBoolean("enabled",false).apply();stopService(Intent(this,SyncService::class.java));render()}
     private fun reconnect(){
         autoConnect=true;stopService(Intent(this,SyncService::class.java));prefs.edit().remove("connectionIssue").apply();begin(true);render()
+    }
+    private fun panels(parent:LinearLayout,wide:Boolean):Pair<LinearLayout,LinearLayout>{
+        val row=LinearLayout(this).apply{orientation=if(wide)LinearLayout.HORIZONTAL else LinearLayout.VERTICAL};parent.addView(row)
+        val left=column();val right=column()
+        row.addView(left,LinearLayout.LayoutParams(if(wide)0 else -1,-2,if(wide)1f else 0f).apply{if(wide)rightMargin=dp(20)})
+        row.addView(right,LinearLayout.LayoutParams(if(wide)0 else -1,-2,if(wide)1f else 0f))
+        return left to right
     }
     private fun render(){
         activeScroll?.let{scrollOffsets[renderedTab]=it.scrollY}
@@ -204,12 +211,13 @@ class MainActivity:Activity() {
                 if(issue!=null){val g=group(left,"최근 연결 문제");g.addView(label(issue,14f,secondary));space(g,12);button(g,"원인과 해결 방법",false){diagnostics()}}
             }
             1->{
-                val tools=group(body,"클립보드")
+                val (options,records)=panels(body,wide)
+                val tools=group(options,"클립보드")
                 toggleRow(tools,"복사 기록 저장",ClipHistory.enabled(this)){getSharedPreferences("clipboard",0).edit().putBoolean("history",it).apply()}
                 row(tools,"현재 클립보드 가져오기","›","자동 감지가 안 되는 앱의 텍스트·이미지 한 장을 가져옵니다.",action={captureNow()})
                 toggleRow(tools,"즐겨찾기만 보기",historyFilter){historyFilter=it;render()}
                 val items=ClipHistory.entries(this).filter{!historyFilter||it.optBoolean("favorite")}
-                val list=group(body,if(historyFilter)"즐겨찾기"else"최근 기록 · 최대 200개")
+                val list=group(records,if(historyFilter)"즐겨찾기"else"최근 기록 · 최대 200개")
                 if(items.isEmpty()){val empty=label("아직 기록이 없습니다. CoolSync에서 감지한 새 복사부터 여기에 표시됩니다.",14f,secondary);empty.setPadding(0,dp(18),0,dp(18));list.addView(empty)}
                 items.forEach{item->
                     if(list.childCount>0)divider(list)
@@ -220,32 +228,34 @@ class MainActivity:Activity() {
                     fun action(title:String,run:()->Unit){actions.addView(label(title,13f,blue,true).apply{gravity=Gravity.CENTER;minHeight=dp(42);background=shape(0x0c007aff,12);interactive(this,run)},LinearLayout.LayoutParams(0,dp(42),1f).apply{rightMargin=dp(6)})}
                     action("다시 복사"){ClipHistory.copy(this,item);toast("클립보드에 복사했습니다")};action(if(item.optBoolean("favorite"))"★ 해제"else"☆ 즐겨찾기"){ClipHistory.favorite(this,item.getString("id"));render()};action("삭제"){ClipHistory.remove(this,item.getString("id"));render()};entry.addView(actions);list.addView(entry)
                 }
-                if(items.isNotEmpty())button(body,"모든 기록 삭제",false){val(d,b)=sheet("기록을 모두 삭제할까요?");b.addView(label("이 기기의 기록과 즐겨찾기를 삭제합니다. 현재 시스템 클립보드와 상대 기기의 기록은 유지됩니다.",14f,secondary));space(b,18);button(b,"모두 삭제"){ClipHistory.clear(this);d.dismiss();render();scanQR()};button(b,"취소",false){d.dismiss()}}
-                body.addView(label("기록은 이 기기에만 저장합니다. 민감한 클립보드 표시는 존중하며, 휴대폰 잠금 중에는 공유하지 않습니다.",12f,secondary))
+                if(items.isNotEmpty())button(records,"모든 기록 삭제",false){val(d,b)=sheet("기록을 모두 삭제할까요?");b.addView(label("이 기기의 기록과 즐겨찾기를 삭제합니다. 현재 시스템 클립보드와 상대 기기의 기록은 유지됩니다.",14f,secondary));space(b,18);button(b,"모두 삭제"){ClipHistory.clear(this);d.dismiss();render()};button(b,"취소",false){d.dismiss()}}
+                options.addView(label("기록은 이 기기에만 저장합니다. 민감한 클립보드 표시는 존중하며, 휴대폰 잠금 중에는 공유하지 않습니다.",12f,secondary))
             }
 
             2->{
-                val g=group(body,"휴대폰 저장소")
+                val (storagePanel,transferPanel)=panels(body,wide)
+                val g=group(storagePanel,"휴대폰 저장소")
                 row(g,"파일 관리",if(storage())"허용됨"else"권한 필요",action={showPermissions()})
                 row(g,"Mac에서 탐색",if(SyncService.active?.authenticated==true)"연결됨"else"연결 필요","Mac 앱의 내부 저장소에서 파일·폴더를 만들고 복사·이동·삭제합니다.",action={if(!storage())showPermissions()else{selectedTab=0;render()}})
-                val transfer=group(body,"전송")
+                val transfer=group(transferPanel,"전송")
                 row(transfer,"진행 상태",if(FilesBridge.busy)"${FilesBridge.progress}%"else"대기",FilesBridge.summary.takeIf{FilesBridge.busy||FilesBridge.offer!=null})
                 FilesBridge.offer?.takeIf{it.optString("flow")=="download"&&FilesBridge.destination==null}?.let{offer->button(transfer,"파일 받기"){ @Suppress("DEPRECATION")startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/octet-stream").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,offer.optString("name")),41)}}
                 if(FilesBridge.busy||FilesBridge.offer!=null)button(transfer,"전송 취소",false){FilesBridge.reject(this)}
             }
             3->{
-                val g=group(body,"연결 및 권한")
+                val (deviceSettings,appSettings)=panels(body,wide)
+                val g=group(deviceSettings,"연결 및 권한")
                 row(g,"권한 관리","›",action={showPermissions()});row(g,"연결 진단","›",action={diagnostics()})
                 toggleRow(g,"재부팅 후 연결 시작",prefs.getBoolean("boot",true)){prefs.edit().putBoolean("boot",it).apply()}
 
-                val alerts=group(body,"알림 공유")
+                val alerts=group(appSettings,"알림 공유")
                 toggleRow(alerts,"Mac에 휴대폰 알림 표시",prefs.getBoolean("forwardNotifications",false)){enabled->prefs.edit().putBoolean("forwardNotifications",enabled).apply();if(enabled&&!notificationAccess())notificationSettings()}
                 row(alerts,"알림 접근 권한",if(notificationAccess())"허용됨"else"설정 필요",action={notificationSettings()})
                 alerts.addView(label("휴대폰이 잠겨 있으면 내용을 보내지 않습니다. Mac에서도 알림 권한을 허용하세요.",12f,secondary).apply{setPadding(0,dp(8),0,dp(12))})
-                val unlink=group(body,"등록된 Mac")
+                val unlink=group(deviceSettings,"등록된 Mac")
                 row(unlink,"다른 Mac 연결","›",action={manualKey()})
                 row(unlink,"등록 해제","›","저장된 연결 정보를 삭제합니다.",action={confirmUnlink()})
-                val updates=group(body,"앱 업데이트")
+                val updates=group(appSettings,"앱 업데이트")
                 row(updates,"업데이트",AppUpdates.status,action={AppUpdates.update(this)})
                 row(updates,"설치된 빌드",packageManager.getPackageInfo(packageName,0).longVersionCode.toString())
                 toggleRow(updates,"새 업데이트 자동 확인",getSharedPreferences("updates",0).getBoolean("automatic",true)){getSharedPreferences("updates",0).edit().putBoolean("automatic",it).apply()}

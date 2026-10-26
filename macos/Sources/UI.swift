@@ -65,30 +65,54 @@ struct CoolDashboard:View {
     @Environment(\.colorScheme) private var scheme
     var body:some View{
         HStack(spacing:0){
-            if model.tab != 4 { VStack(alignment:.leading,spacing:8){
-                Text("CoolSync").font(.system(size:17,weight:.semibold)).padding(.bottom,16)
-                Button("연결"){model.tab=0}.buttonStyle(.plain).font(.system(size:13,weight:.semibold))
-                Text("기기").font(.system(size:11,weight:.semibold)).foregroundStyle(.secondary)
-                Button{model.tab=0}label:{HStack(alignment:.top,spacing:9){Image(systemName:"iphone");VStack(alignment:.leading,spacing:4){Text(model.name).lineLimit(2);Text(model.connected ? "연결됨":"미연결").font(.system(size:11)).foregroundStyle(model.connected ? .green:.secondary)}}.padding(.vertical,7)}.buttonStyle(.plain)
-                Button{model.tab=3}label:{Label("클립보드",systemImage:"clipboard").frame(maxWidth:.infinity,alignment:.leading).padding(10).background(model.tab==3 ? Color.blue.opacity(0.14):.clear,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain)
-                Button{model.tab=4}label:{Label("사진첩",systemImage:"photo.on.rectangle").frame(maxWidth:.infinity,alignment:.leading).padding(10)}.buttonStyle(.plain)
-                Divider().padding(.vertical,9)
-                Text("휴대폰 저장소").font(.system(size:11,weight:.semibold)).foregroundStyle(.secondary)
-                location("내부 저장소","internaldrive","")
-                location("다운로드","arrow.down.circle","Download")
-                location("문서","doc","Documents")
-                location("카메라","camera","DCIM")
-                Button{model.tab=1;model.explorer.showTrash()}label:{Label("휴지통",systemImage:"trash").frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,7)}.buttonStyle(.plain)
-                Spacer()
-                Text(model.model).font(.system(size:11)).foregroundStyle(.secondary)
-                Button{model.tab=2}label:{Label("설정",systemImage:"gearshape")}.buttonStyle(.plain).padding(.top,12)
-            }.padding(18).frame(width:168).frame(maxHeight:.infinity).background(.ultraThinMaterial)
-            Divider() }
+            if model.tab != 4 {
+                VStack(spacing:0) {
+                    HStack(spacing:10){Image(systemName:"iphone.gen3").font(.title2).foregroundStyle(.blue);VStack(alignment:.leading,spacing:4){Text(model.name).font(.headline).lineLimit(2);Text(model.connected ? "연결됨":"미연결").font(.caption).foregroundStyle(model.connected ? .green:.secondary)};Spacer()}.padding(18)
+                    List(selection:sidebarSelection) {
+                        Section("CoolSync") {
+                            Label("연결",systemImage:"link").tag("connection")
+                            Label("클립보드",systemImage:"clipboard").tag("clipboard")
+                            Label("사진첩",systemImage:"photo.on.rectangle").tag("photos")
+                        }
+                        Section("휴대폰 저장소") {
+                            Label("내부 저장소",systemImage:"internaldrive").tag("folder:")
+                            Label("다운로드",systemImage:"arrow.down.circle").tag("folder:Download")
+                            Label("문서",systemImage:"doc").tag("folder:Documents")
+                            Label("카메라",systemImage:"camera").tag("folder:DCIM")
+                            Label("휴지통",systemImage:"trash").tag("trash")
+                        }
+                        Section { Label("설정",systemImage:"gearshape").tag("settings") }
+                    }.listStyle(.sidebar)
+                    if !model.model.isEmpty { Text(model.model).font(.caption).foregroundStyle(.secondary).padding(12) }
+                }.frame(width:210).background(.ultraThinMaterial)
+                Divider()
+            }
+            VStack(spacing:0) {
+                if !model.connected && model.tab != 0 && model.tab != 2 {
+                    HStack { Image(systemName:"wifi.exclamationmark");Text(model.connectionIssue.isEmpty ? model.status:model.connectionIssue).lineLimit(2);Spacer();Button("연결하기"){model.tab=0} }.font(.callout).padding(12).background(.thinMaterial)
+                    Divider()
+                }
             Group{if model.tab==4{PhotosPane(photos:model.photos,files:model.files,exit:{model.tab=0},trash:{model.tab=1;model.explorer.showTrash()})}else if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
+            }
         }.background(LinearGradient(colors:scheme == .dark ? [Color(red:0.08,green:0.10,blue:0.15),Color(red:0.13,green:0.09,blue:0.15)]:[Color(red:0.94,green:0.96,blue:1),Color(red:0.98,green:0.96,blue:0.99)],startPoint:.topLeading,endPoint:.bottomTrailing)).animation(reduceMotion ? nil:.easeInOut(duration:0.2),value:model.tab).frame(minWidth:800,minHeight:520)
         .alert("연결 확인",isPresented:$model.showConnectionIssue){Button("다시 연결"){model.engine?.reconnect()};Button("닫기",role:.cancel){}}message:{Text((model.connectionIssue.isEmpty ? model.status:model.connectionIssue)+"\n\n휴대폰에서 CoolSync의 연결을 시작하고 주변 기기 권한을 허용하세요. 두 기기의 Bluetooth를 켜고, 인증이 실패하면 현재 QR을 다시 스캔하세요.")}
     }
-    private func location(_ title:String,_ icon:String,_ path:String)->some View{Button{model.tab=1;model.explorer.browse(path)}label:{Label(title,systemImage:icon).frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,7).padding(.horizontal,6).background(model.tab==1 && !model.explorer.trashMode && model.explorer.path==path ? Color.blue.opacity(0.12):.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)}
+    private var sidebarSelection:Binding<String?> {
+        Binding(get:{
+            if model.tab==0{return "connection"};if model.tab==3{return "clipboard"};if model.tab==4{return "photos"};if model.tab==2{return "settings"}
+            return model.explorer.trashMode ? "trash":"folder:"+model.explorer.path
+        },set:{ value in
+            guard let value else { return }
+            switch value {
+            case "connection":model.tab=0
+            case "clipboard":model.tab=3
+            case "photos":model.tab=4
+            case "settings":model.tab=2
+            case "trash":model.tab=1;model.explorer.showTrash()
+            default:if value.hasPrefix("folder:"){model.tab=1;model.explorer.browse(String(value.dropFirst(7)))}
+            }
+        })
+    }
     private var connection:some View{
         ScrollView {
             VStack(alignment:.leading,spacing:20) {
