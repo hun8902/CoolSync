@@ -1,0 +1,261 @@
+package app.coolsync
+
+import android.Manifest
+import android.app.*
+import android.bluetooth.BluetoothAdapter
+import android.content.*
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.*
+import android.provider.Settings
+import android.view.*
+import android.widget.*
+
+class MainActivity:Activity() {
+    private val prefs by lazy{getSharedPreferences("sync",0)}
+    private var selectedTab=0
+    private var pairingDialog:Dialog?=null
+    private var connectionDetail:TextView?=null
+    private var connectionBadge:TextView?=null
+    private var autoConnect=false
+    private var pending=false
+    private var observed=false
+    private var wizard:Dialog?=null
+    private var wizardContinue:TextView?=null
+    private var wizardBody:LinearLayout?=null
+    private var ink=Color.BLACK
+    private var secondary=Color.GRAY
+    private var paper=Color.WHITE
+    private var liveFingerprint=""
+    private val values=HashMap<String,TextView>()
+    private val details=HashMap<String,TextView>()
+    private val blue=0xff007aff.toInt()
+    private val receiver=object:BroadcastReceiver(){override fun onReceive(c:Context?,i:Intent?){refreshLive();refreshWizard()}}
+    private fun dp(n:Int)=(n*resources.displayMetrics.density).toInt()
+    override fun onCreate(state:Bundle?){super.onCreate(state);selectedTab=state?.getInt("tab",0) ?: 0;window.setDecorFitsSystemWindows(false);render();consume(intent)}
+    override fun onSaveInstanceState(out:Bundle){out.putInt("tab",selectedTab);super.onSaveInstanceState(out)}
+    override fun onNewIntent(value:Intent){super.onNewIntent(value);intent=value;consume(value);render()}
+    // Android 12 uses a signature permission in place of Android 13's non-exported receiver flag.
+    @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
+    override fun onResume(){
+        super.onResume()
+        if(!observed){if(Build.VERSION.SDK_INT>=33)registerReceiver(receiver,IntentFilter(SyncService.STATE),RECEIVER_NOT_EXPORTED)else registerReceiver(receiver,IntentFilter(SyncService.STATE),"$packageName.INTERNAL",null);observed=true}
+        AppUpdates.changed={if(!isFinishing)render()};AppUpdates.automatic(this)
+        render();refreshWizard()
+        if(autoConnect || prefs.getBoolean("enabled",false))begin(false)
+        if(!prefs.getBoolean("onboardingSeen",false)){prefs.edit().putBoolean("onboardingSeen",true).apply();window.decorView.post{showPermissions()}}
+    }
+    override fun onPause(){AppUpdates.changed=null;if(observed){unregisterReceiver(receiver);observed=false};super.onPause()}
+    private fun nearby()=checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE)==PackageManager.PERMISSION_GRANTED
+    private fun accessibility()=Settings.Secure.getString(contentResolver,Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)?.contains("$packageName/",true)==true
+    private fun notifications()=Build.VERSION.SDK_INT<33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
+    private fun storage()=Environment.isExternalStorageManager()
+    private fun consume(value:Intent){
+        val uri=value.data
+        if(uri?.scheme=="coolsync" && uri.host=="pair"){
+            val key=uri.getQueryParameter("key")?.lowercase()
+            if(key?.matches(Regex("[a-f0-9]{64}"))!=true){showIssue("연결 정보를 확인하세요","Mac에서 복사한 연결 키 또는 CoolSync 연결 링크를 붙여넣어 주세요.");return}
+            val previous=prefs.getString("key","")
+            fun save(){if(previous!=key){stopService(Intent(this,SyncService::class.java));prefs.edit().putString("key",key).putString("macName",uri.getQueryParameter("name")?.take(80) ?: "Mac").apply()};prefs.edit().putBoolean("enabled",true).apply();autoConnect=true;begin(true);render()}
+            if(!previous.isNullOrEmpty() && previous!=key)AlertDialog.Builder(this).setTitle("연결할 Mac 변경").setMessage("기존 Mac 대신 새 Mac에 연결합니다.").setPositiveButton("변경"){_,_->save()}.setNegativeButton("취소",null).show()else save()
+            value.data=null
+        }
+        if(value.action==Intent.ACTION_SEND){@Suppress("DEPRECATION")val uri=value.getParcelableExtra<Uri>(Intent.EXTRA_STREAM);if(uri!=null)FilesBridge.select(this,uri);value.action=Intent.ACTION_MAIN}
+    }
+    private fun begin(request:Boolean){
+        if(Protocol.key(this)==null){if(request)manualKey();return}
+        if(!nearby()){if(request || autoConnect)showPermissions();return}
+        if(checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED)return
+        val adapter=getSystemService(android.bluetooth.BluetoothManager::class.java).adapter
+        if(adapter?.isEnabled!=true){if((request||autoConnect)&&!pending){pending=true;@Suppress("DEPRECATION")startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE),30)};return}
+        try{prefs.edit().putBoolean("enabled",true).apply();startForegroundService(Intent(this,SyncService::class.java));autoConnect=false}catch(e:Exception){showIssue("연결을 시작하지 못했습니다", "시스템이 백그라운드 연결 시작을 거부했습니다. 앱을 연 상태에서 다시 연결해 주세요.\n"+e.javaClass.simpleName)}
+    }
+    private fun requestRuntime(){
+        if(pending)return
+        val missing=mutableListOf<String>()
+        if(!nearby()){missing+=Manifest.permission.BLUETOOTH_CONNECT;missing+=Manifest.permission.BLUETOOTH_ADVERTISE}
+        if(Build.VERSION.SDK_INT>=33 && !notifications())missing+=Manifest.permission.POST_NOTIFICATIONS
+        if(missing.isNotEmpty()){pending=true;requestPermissions(missing.toTypedArray(),10)}
+    }
+    private fun special(kind:Int){
+        try{if(kind==1)startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))else startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:$packageName")))}
+        catch(_:Exception){toast("시스템 설정에서 CoolSync 권한을 확인하세요")}
+    }
+    private fun nextPermission(){when{!nearby()->requestRuntime();!accessibility()->special(1);!storage()->special(2);else->{wizard?.dismiss();prefs.edit().putBoolean("onboardingComplete",true).apply();if(autoConnect)begin(false)}}}
+    private fun showPermissions(){
+        if(isFinishing)return
+        if(wizard?.isShowing==true){refreshWizard();return}
+        val dialog=Dialog(this);val content=column();content.setPadding(dp(24),dp(24),dp(24),dp(16));content.background=shape(paper,24)
+        content.addView(label("권한 설정",23f,ink,true));space(content,16)
+        val body=column();wizardBody=body;val scroll=ScrollView(this);scroll.addView(body);content.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        space(content,16);button(content,"설정 계속"){nextPermission()};wizardContinue=content.getChildAt(content.childCount-2) as TextView;button(content,"나중에",false){dialog.dismiss()}
+        dialog.setContentView(content);dialog.window?.setBackgroundDrawableResource(android.R.color.transparent);wizard=dialog
+        dialog.setOnDismissListener{wizardBody=null;wizardContinue=null;wizard=null;render()};dialog.show()
+        dialog.window?.setLayout(dp((resources.configuration.screenWidthDp-40).coerceAtMost(380)),dp((resources.configuration.screenHeightDp-64).coerceAtMost(620)))
+        refreshWizard()
+    }
+
+    private fun refreshWizard(){
+        val body=wizardBody ?: return;body.removeAllViews()
+        body.addView(label("필요한 권한을 여기서 한 번에 확인합니다. 실제 허용은 안드로이드 시스템 화면에서 진행됩니다.",14f,secondary));space(body,18)
+        permissionRow(body,"주변 기기","Mac과 Bluetooth로 연결",nearby()){requestRuntime()}
+        permissionRow(body,"자동 복사","복사 동작 감지 · 접근성 설정",accessibility()){special(1)}
+        permissionRow(body,"파일 관리","Mac에서 내부 저장소 탐색·편집",storage()){special(2)}
+        permissionRow(body,"알림","연결 상태 표시 · 선택 사항",notifications()){requestRuntime()}
+        space(body,14);body.addView(label("파일 관리 권한도 앱 전용 데이터나 시스템 보호 폴더를 열 수 있게 하지는 않습니다.",12f,secondary))
+        wizardContinue?.text=if(nearby()&&accessibility()&&storage())"완료"else "설정 계속"
+    }
+    private fun permissionRow(parent:LinearLayout,title:String,detail:String,granted:Boolean,action:()->Unit){
+        val row=column();row.setPadding(0,dp(12),0,dp(12));val heading=LinearLayout(this);heading.addView(label(title,16f,ink,true),LinearLayout.LayoutParams(0,-2,1f));heading.addView(label(if(granted)"허용됨"else"허용",14f,if(granted)secondary else blue));row.addView(heading);row.addView(label(detail,13f,secondary));row.setOnClickListener{if(!granted)action()};parent.addView(row);divider(parent)
+    }
+    override fun onRequestPermissionsResult(code:Int,permissions:Array<out String>,results:IntArray){super.onRequestPermissionsResult(code,permissions,results);pending=false;render();refreshWizard();if(nearby()&&autoConnect)begin(false)}
+    @Deprecated("Activity result")override fun onActivityResult(code:Int,result:Int,data:Intent?){super.onActivityResult(code,result,data);pending=false;if(code==30&&result==RESULT_OK)begin(false);if(code==41&&result==RESULT_OK)data?.data?.let{FilesBridge.accept(this,it)};render();refreshWizard()}
+    private fun label(value:String,size:Float=16f,color:Int=ink,bold:Boolean=false)=TextView(this).apply{text=value;textSize=size;setTextColor(color);if(bold)typeface=Typeface.DEFAULT_BOLD;setLineSpacing(dp(2).toFloat(),1f)}
+    private fun column()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+    private fun space(parent:LinearLayout,n:Int=16){parent.addView(Space(this),LinearLayout.LayoutParams(1,dp(n)))}
+    private fun divider(parent:LinearLayout){parent.addView(View(this).apply{setBackgroundColor(if(paper==Color.WHITE)0xffe4e4e8.toInt()else 0xff3b3b3f.toInt())},LinearLayout.LayoutParams(-1,dp(1)))}
+    private fun group(parent:LinearLayout,title:String):LinearLayout{parent.addView(label(title,13f,secondary));space(parent,8);val g=column();g.setPadding(dp(16),dp(2),dp(16),dp(2));g.background=GradientDrawable().apply{setColor(paper);cornerRadius=dp(12).toFloat()};parent.addView(g,LinearLayout.LayoutParams(-1,-2));space(parent,24);return g}
+    private fun row(parent:LinearLayout,title:String,value:String,detail:String?=null,action:(()->Unit)?=null){val row=column();row.setPadding(0,dp(14),0,dp(14));val line=LinearLayout(this);line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f));val valueView=label(value,14f,if(action!=null)blue else secondary);values[title]=valueView;line.addView(valueView);row.addView(line);if(detail!=null){space(row,4);val detailView=label(detail,13f,secondary);details[title]=detailView;row.addView(detailView)};if(action!=null){row.isFocusable=true;row.setOnClickListener{action()}};parent.addView(row);divider(parent)}
+    private fun fingerprint()="${SyncService.active?.authenticated}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}"
+    private fun refreshLive(){
+        if(fingerprint()!=liveFingerprint){render();return}
+        connectionDetail?.text=connectionText()
+        connectionBadge?.text=if(SyncService.active?.authenticated==true)"연결됨" else "미연결"
+        values["진행 상태"]?.text=if(FilesBridge.busy) "${FilesBridge.progress}%" else "대기"
+        values["마지막 동기화"]?.text=lastSyncText()
+    }
+    private fun lastSyncText()=SyncService.active?.lastSync?.takeIf{it>0}?.let{android.text.format.DateFormat.format("a h:mm",it).toString()} ?: "아직 없음"
+    private fun connectionText():String {
+        if(Protocol.key(this)==null)return "Mac에서 CoolSync를 열고 연결 QR을 스캔하세요."
+        if(!nearby())return "주변 기기 권한이 필요합니다. 권한 설정에서 허용하세요."
+        if(!prefs.getBoolean("enabled",false))return "연결이 중지되어 있습니다. 아래에서 연결을 시작하세요."
+        return SyncService.active?.status ?: "연결 서비스가 실행되지 않았습니다. 다시 연결해 주세요."
+    }
+    private fun shape(color:Int,radius:Int=16)=GradientDrawable().apply{setColor(color);cornerRadius=dp(radius).toFloat()}
+    private fun button(parent:LinearLayout,title:String,primary:Boolean=true,action:()->Unit){
+        val v=label(title,16f,if(primary)Color.WHITE else blue,true).apply{gravity=Gravity.CENTER;minHeight=dp(50);background=shape(if(primary)blue else if(paper==Color.WHITE)0xffeaf2ff.toInt() else 0xff172c49.toInt(),14);isFocusable=true;setOnClickListener{action()}}
+        parent.addView(v,LinearLayout.LayoutParams(-1,dp(50)));space(parent,10)
+    }
+    private fun pauseConnection(){autoConnect=false;prefs.edit().putBoolean("enabled",false).apply();stopService(Intent(this,SyncService::class.java));render()}
+    private fun reconnect(){
+        autoConnect=true;stopService(Intent(this,SyncService::class.java));prefs.edit().remove("connectionIssue").apply();begin(true);render()
+    }
+    private fun render(){
+        values.clear();details.clear();connectionDetail=null;connectionBadge=null
+        val dark=resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK==Configuration.UI_MODE_NIGHT_YES
+        ink=if(dark)0xfff4f4f6.toInt()else 0xff1c1c1e.toInt();secondary=if(dark)0xffa0a0a6.toInt()else 0xff707078.toInt();paper=if(dark)0xff1c1c1e.toInt()else Color.WHITE
+        val root=column();root.setBackgroundColor(if(dark)Color.BLACK else 0xfff2f2f7.toInt())
+        root.setOnApplyWindowInsetsListener{view,insets->val bars=insets.getInsets(WindowInsets.Type.systemBars());view.setPadding(bars.left,bars.top,bars.right,bars.bottom);insets}
+        val scroll=ScrollView(this);root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        val frame=FrameLayout(this);scroll.addView(frame)
+        val body=column();body.setPadding(dp(24),dp(24),dp(24),dp(20));frame.addView(body,FrameLayout.LayoutParams(dp((resources.configuration.screenWidthDp-0).coerceAtMost(560)),-2,Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        val titles=listOf("연결","클립보드","파일","설정")
+        body.addView(label(titles[selectedTab],32f,ink,true));space(body,24)
+        when(selectedTab){
+            0->{
+                val connected=SyncService.active?.authenticated==true
+                val device=group(body,"MY MAC")
+                val top=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;setPadding(0,dp(16),0,dp(16))}
+                top.addView(LinkIcon(this,0,blue),LinearLayout.LayoutParams(dp(38),dp(38)))
+                val title=column();title.setPadding(dp(14),0,0,0);title.addView(label(prefs.getString("macName","연결할 Mac") ?: "Mac",20f,ink,true));connectionBadge=label(if(connected)"연결됨"else"미연결",13f,if(connected)0xff248a3d.toInt()else secondary);title.addView(connectionBadge);top.addView(title,LinearLayout.LayoutParams(0,-2,1f));device.addView(top)
+                connectionDetail=label(connectionText(),15f,secondary);device.addView(connectionDetail);space(device,18)
+                if(Protocol.key(this)==null){button(device,"Mac 연결하기"){manualKey()}}else{button(device,if(connected)"다시 연결"else"연결 시작 / 재연결"){reconnect()};if(prefs.getBoolean("enabled",false))button(device,"연결 중지",false){pauseConnection()}}
+                val setup=group(body,"연결 설정")
+                row(setup,"연결 정보 입력","›","Mac의 QR을 스캔하거나 연결 정보를 붙여넣으세요.",action={manualKey()})
+                row(setup,"권한 설정",if(nearby())"확인 ›"else"허용 필요 ›",action={showPermissions()})
+                row(setup,"연결 문제 확인","›",action={diagnostics()})
+                val issue=prefs.getString("connectionIssue",null)
+                if(issue!=null){val g=group(body,"최근 연결 문제");g.addView(label(issue,14f,secondary));space(g,12);button(g,"원인과 해결 방법",false){diagnostics()}}
+            }
+            1->{
+                val g=group(body,"자동 공유")
+                row(g,"연결 상태",if(SyncService.active?.authenticated==true)"연결됨"else"연결 필요",action={selectedTab=0;render()})
+                row(g,"자동 복사",if(accessibility())"사용 중"else"설정 필요","휴대폰에서 복사하면 연결된 Mac에 반영합니다.",action={showPermissions()})
+                row(g,"마지막 동기화",lastSyncText())
+                body.addView(label("클립보드 내용은 이 화면에 저장하거나 표시하지 않습니다. 휴대폰이 잠겨 있을 때는 공유가 중지됩니다.",14f,secondary))
+            }
+            2->{
+                val g=group(body,"휴대폰 저장소")
+                row(g,"파일 관리",if(storage())"허용됨"else"권한 필요",action={showPermissions()})
+                row(g,"Mac에서 탐색",if(SyncService.active?.authenticated==true)"연결됨"else"연결 필요","Mac 앱의 내부 저장소에서 파일·폴더를 만들고 복사·이동·삭제합니다.",action={if(!storage())showPermissions()else{selectedTab=0;render()}})
+                val transfer=group(body,"전송")
+                row(transfer,"진행 상태",if(FilesBridge.busy)"${FilesBridge.progress}%"else"대기",FilesBridge.summary.takeIf{FilesBridge.busy||FilesBridge.offer!=null})
+                FilesBridge.offer?.takeIf{it.optString("flow")=="download"&&FilesBridge.destination==null}?.let{offer->button(transfer,"파일 받기"){ @Suppress("DEPRECATION")startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/octet-stream").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,offer.optString("name")),41)}}
+                if(FilesBridge.busy||FilesBridge.offer!=null)button(transfer,"전송 취소",false){FilesBridge.reject(this)}
+            }
+            3->{
+                val g=group(body,"연결 및 권한")
+                row(g,"권한 관리","›",action={showPermissions()});row(g,"연결 진단","›",action={diagnostics()})
+                val boot=Switch(this).apply{text="재부팅 후 연결 시작";textSize=16f;setTextColor(ink);isChecked=prefs.getBoolean("boot",true);setPadding(0,dp(14),0,dp(14));setOnCheckedChangeListener{_,v->prefs.edit().putBoolean("boot",v).apply()}};g.addView(boot)
+                val unlink=group(body,"등록된 Mac")
+                row(unlink,"다른 Mac 연결","›",action={manualKey()})
+                row(unlink,"등록 해제","›","저장된 연결 정보를 삭제합니다.",action={confirmUnlink()})
+                val updates=group(body,"앱 업데이트")
+                row(updates,"업데이트",AppUpdates.status,action={updateSheet()})
+                val automatic=Switch(this).apply{text="새 업데이트 자동 확인";textSize=16f;setTextColor(ink);isChecked=getSharedPreferences("updates",0).getBoolean("automatic",true);setOnCheckedChangeListener{_,v->getSharedPreferences("updates",0).edit().putBoolean("automatic",v).apply()}};updates.addView(automatic)
+                body.addView(label("CoolSync",13f,secondary))
+            }
+        }
+        divider(root)
+        val nav=LinearLayout(this).apply{setPadding(dp(8),dp(8),dp(8),dp(8));setBackgroundColor(paper)}
+        titles.forEachIndexed{i,title->val item=column();item.gravity=Gravity.CENTER;item.background=shape(if(i==selectedTab)if(dark)0xff172c49.toInt()else 0xffeaf2ff.toInt()else Color.TRANSPARENT,18);item.addView(LinkIcon(this,i,if(i==selectedTab)blue else secondary),LinearLayout.LayoutParams(dp(24),dp(24)));space(item,4);item.addView(label(title,11f,if(i==selectedTab)blue else secondary,i==selectedTab).apply{gravity=Gravity.CENTER});item.contentDescription=title+" 탭";item.isFocusable=true;item.setOnClickListener{selectedTab=i;render()};nav.addView(item,LinearLayout.LayoutParams(0,dp(58),1f).apply{setMargins(dp(3),0,dp(3),0)})};root.addView(nav)
+        setContentView(root);root.requestApplyInsets()
+        window.insetsController?.setSystemBarsAppearance(if(dark)0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+        liveFingerprint=fingerprint()
+    }
+    private fun sheet(title:String):Pair<Dialog,LinearLayout>{
+        pairingDialog?.dismiss()
+        val dialog=Dialog(this);val body=column();body.setPadding(dp(24),dp(24),dp(24),dp(16));body.background=shape(paper,24)
+        body.addView(label(title,21f,ink,true));space(body,12)
+        val scroll=ScrollView(this);scroll.addView(body);dialog.setContentView(scroll);dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setOnDismissListener{if(pairingDialog==dialog)pairingDialog=null};pairingDialog=dialog
+        dialog.show();dialog.window?.setLayout(dp((resources.configuration.screenWidthDp-40).coerceAtMost(380)),-2);dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        return dialog to body
+    }
+    private fun manualKey(){
+        val(dialog,body)=sheet("Mac 연결")
+        body.addView(label("Mac의 CoolSync에서 연결 QR을 스캔하세요. 직접 연결할 때는 복사한 연결 정보를 아래에 붙여넣으세요.",14f,secondary));space(body,20)
+        body.addView(label("연결 키 또는 링크",12f,secondary,true));space(body,8)
+        val input=EditText(this).apply{hint="여기에 붙여넣기";textSize=16f;setTextColor(ink);setHintTextColor(secondary);setPadding(dp(16),dp(14),dp(16),dp(14));background=shape(if(paper==Color.WHITE)0xfff2f2f7.toInt()else 0xff303034.toInt(),12);maxLines=3;minHeight=dp(54);inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS}
+        body.addView(input,LinearLayout.LayoutParams(-1,-2));space(body,8)
+        val error=label("",13f,0xffff453a.toInt());error.visibility=View.GONE;body.addView(error)
+        input.addTextChangedListener(object:android.text.TextWatcher{override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){};override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){error.visibility=View.GONE};override fun afterTextChanged(s:android.text.Editable?) {}})
+        space(body,16)
+        button(body,"연결"){
+            val value=input.text.toString().trim();val key=if(value.startsWith("coolsync://"))runCatching{Uri.parse(value).getQueryParameter("key")}.getOrNull()else value
+            if(key?.matches(Regex("[a-fA-F0-9]{64}"))!=true){error.text="연결 정보가 올바르지 않습니다. Mac에서 복사한 키 또는 링크를 붙여넣으세요.";error.visibility=View.VISIBLE;input.requestFocus()}
+            else{dialog.dismiss();selectedTab=0;consume(Intent(Intent.ACTION_VIEW,if(value.startsWith("coolsync://"))Uri.parse(value)else Uri.parse("coolsync://pair?key=$key")));render()}
+        }
+        button(body,"취소",false){dialog.dismiss()}
+    }
+    private fun updateSheet(){
+        val(d,b)=sheet("앱 업데이트");b.addView(label(AppUpdates.status,15f,secondary));space(b,16)
+        when{AppUpdates.busy->b.addView(label("작업이 끝나면 설정 화면에 결과가 표시됩니다.",14f,secondary));AppUpdates.ready()->button(b,"업데이트 설치"){d.dismiss();AppUpdates.install(this)};AppUpdates.available!=null->button(b,"다운로드"){d.dismiss();AppUpdates.download(this)};else->button(b,"업데이트 확인"){d.dismiss();AppUpdates.check(this)}}
+        button(b,"닫기",false){d.dismiss()}
+    }
+    private fun confirmUnlink(){val(d,b)=sheet("Mac 등록을 해제할까요?");b.addView(label("다시 연결하려면 Mac의 QR을 스캔해야 합니다.",14f,secondary));space(b,20);button(b,"등록 해제"){pauseConnection();prefs.edit().remove("key").remove("macName").remove("connectionIssue").apply();d.dismiss();render()};button(b,"취소",false){d.dismiss()}}
+    private fun showIssue(title:String,message:String){val(d,b)=sheet(title);b.addView(label(message,15f,secondary));space(b,20);button(b,"다시 연결"){d.dismiss();reconnect()};button(b,"닫기",false){d.dismiss()}}
+    private fun diagnostics(){
+        val(d,b)=sheet("연결 확인")
+        val adapter=if(nearby())runCatching{getSystemService(android.bluetooth.BluetoothManager::class.java).adapter?.isEnabled==true}.getOrDefault(false)else false
+        listOf("연결 정보" to (Protocol.key(this)!=null),"주변 기기 권한" to nearby(),"Bluetooth" to adapter,"연결 서비스" to (SyncService.active!=null),"Mac 인증" to (SyncService.active?.authenticated==true)).forEach{(name,ok)->row(b,name,if(ok)"확인됨"else"확인 필요")}
+        space(b,12);b.addView(label(prefs.getString("connectionIssue",null) ?: connectionText(),14f,secondary));space(b,8)
+        b.addView(label("Mac에서도 CoolSync를 열고 Bluetooth를 켜세요. 인증이 실패하면 Mac의 현재 QR을 다시 스캔하고 두 기기의 날짜·시간을 자동으로 설정하세요.",14f,secondary));space(b,20)
+        button(b,"다시 연결"){d.dismiss();reconnect()};button(b,"권한 설정",false){d.dismiss();showPermissions()};button(b,"닫기",false){d.dismiss()}
+    }
+    private class LinkIcon(context:Context,private val kind:Int,private val tint:Int):View(context){
+        override fun onDraw(c:android.graphics.Canvas){super.onDraw(c);c.save();c.scale(width/24f,height/24f);val p=android.graphics.Paint(3).apply{color=tint;style=android.graphics.Paint.Style.STROKE;strokeWidth=1.7f;strokeCap=android.graphics.Paint.Cap.ROUND;strokeJoin=android.graphics.Paint.Join.ROUND}
+            when(kind){
+                0->{c.drawRoundRect(2f,3f,22f,17f,2f,2f,p);c.drawLine(8f,21f,16f,21f,p);c.drawLine(12f,17f,12f,21f,p)}
+                1->{c.drawRoundRect(5f,4f,19f,22f,2f,2f,p);c.drawRoundRect(9f,2f,15f,6f,1f,1f,p);c.drawLine(9f,11f,15f,11f,p);c.drawLine(9f,15f,15f,15f,p)}
+                2->{val path=android.graphics.Path();path.moveTo(2f,7f);path.lineTo(2f,4f);path.lineTo(9f,4f);path.lineTo(12f,7f);path.lineTo(22f,7f);path.lineTo(22f,21f);path.lineTo(2f,21f);path.close();c.drawPath(path,p)}
+                else->{c.drawCircle(12f,12f,7f,p);c.drawCircle(12f,12f,2.5f,p);for(i in 0..7){val a=i*Math.PI/4;c.drawLine((12+8*kotlin.math.cos(a)).toFloat(),(12+8*kotlin.math.sin(a)).toFloat(),(12+10*kotlin.math.cos(a)).toFloat(),(12+10*kotlin.math.sin(a)).toFloat(),p)}}
+            };c.restore()
+        }
+    }
+    private fun toast(text:String){Toast.makeText(this,text,Toast.LENGTH_LONG).show()}
+}

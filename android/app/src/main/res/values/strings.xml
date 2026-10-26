@@ -1,0 +1,5 @@
+<resources>
+<string name="accessibility_description">복사 버튼과 복사 완료 메시지를 감지하여 연결한 Mac으로 텍스트를 보냅니다. 화면 전체를 읽거나 저장하지 않습니다. 클립보드를 읽을 때 투명 화면이 잠깐 포커스를 가져오므로 키보드가 닫힐 수 있습니다. 자동 복사가 필요할 때만 켜세요.</string>
+<style name="CaptureTheme" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:windowIsTranslucent">true</item><item name="android:windowBackground">@android:color/transparent</item><item name="android:windowIsFloating">true</item><item name="android:backgroundDimEnabled">false</item><item name="android:windowNoTitle">true</item><item name="android:windowAnimationStyle">@null</item></style>
+<style name="CoolSyncTheme" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:colorAccent">#007AFF</item></style>
+</resources>

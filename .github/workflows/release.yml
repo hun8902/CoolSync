@@ -1,0 +1,90 @@
+name: Build and release
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', 'macos/**', 'scripts/**', 'updates/**', '.github/workflows/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: coolsync-release
+  cancel-in-progress: false
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build signed APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          COOLSYNC_STORE_PASSWORD: android
+          COOLSYNC_KEY_PASSWORD: android
+          COOLSYNC_KEY_ALIAS: androiddebugkey
+        run: |
+          set -eu
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/coolsync.keystore"
+          chmod 600 "$RUNNER_TEMP/coolsync.keystore"
+          export COOLSYNC_KEYSTORE="$RUNNER_TEMP/coolsync.keystore"
+          sh android/gradlew -p android -PcoolsyncBuild=$((1000 + GITHUB_RUN_NUMBER)) assembleRelease lintRelease
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/CoolSync-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/CoolSync-android.apk
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Mac app
+        run: |
+          COOLSYNC_BUILD=$((1000 + GITHUB_RUN_NUMBER)) sh macos/build.sh
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent macos/build/CoolSync.app dist/CoolSync-mac-arm64.zip
+      - name: Test protocol and file explorer
+        run: python3 tests/explorer-rpc.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/CoolSync-mac-arm64.zip
+  publish:
+    needs: [android, macos]
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create signed update feeds
+        env:
+          ANDROID_UPDATE_KEY: ${{ secrets.ANDROID_UPDATE_PRIVATE_KEY }}
+          SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -eu
+          test -n "$ANDROID_UPDATE_KEY"
+          test -n "$SPARKLE_KEY"
+          printf '%s' "$ANDROID_UPDATE_KEY" > "$RUNNER_TEMP/android-update.pem"
+          printf '%s' "$SPARKLE_KEY" | base64 --decode > "$RUNNER_TEMP/sparkle.key"
+          chmod 600 "$RUNNER_TEMP/android-update.pem" "$RUNNER_TEMP/sparkle.key"
+          python3 scripts/release-metadata.py --build $((1000 + GITHUB_RUN_NUMBER)) --directory dist --android-key "$RUNNER_TEMP/android-update.pem" --sparkle-key "$RUNNER_TEMP/sparkle.key"
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          build=$((1000 + GITHUB_RUN_NUMBER))
+          tag="build-$build"
+          printf '%s\n' 'Android: 설치 확인이 필요합니다.' 'macOS: Apple Silicon, macOS 13 이상. 개인용 서명이며 공증은 받지 않았습니다.' '표시 버전은 유지하며 내부 빌드 번호로 업데이트를 구분합니다.' > "$RUNNER_TEMP/notes.md"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "CoolSync · build $build" --notes-file "$RUNNER_TEMP/notes.md" --draft dist/*
+          gh release edit "$tag" --draft=false --latest

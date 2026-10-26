@@ -1,0 +1,32 @@
+# CoolSync 0.3.0 검증 기록
+
+검증일: 2026-10-26
+
+## 통과한 검사
+
+- Android assembleDebug 성공, lintDebug 오류 0개·경고 9개. Android 12 이상, compile/target SDK 36. 경고는 ScopedStorage, ApplySharedPref, OldTargetApi, ObsoleteSdkInt, UsableSpace, MonochromeLauncherIcon, DrawAllocation 2건, SetTextI18n이다.
+- 0.2.0의 시작 오류를 별도 Android 에뮬레이터에서 재현했다. DecorView 생성 전 insetsController 접근이 원인이었고, setContentView 이후로 옮겼다.
+- 최종 0.3.0 APK의 콜드 시작·프로세스 유지·크래시 로그 검사를 통과했다. Android 권한 통합 창과 메인 화면을 에뮬레이터에서 확인했다.
+- 실제 Android ART에서 저장소 코어 검사 통과: 생성·목록·이름 변경·재귀 복사/이동·휴지통·복원·영구 삭제. 경로 이탈·이름 충돌 거부 및 외부 확인 파일 보존. 같은 코어의 JVM 검사도 통과했다.
+- 휴지통의 원래 경로 정보가 내부 인덱스 유실 후에도 재구성되는 것을 확인했다.
+- Mac 탐색기 RPC 검사 통과: 요청 응답 대응, 목록 페이지 처리, 선택·잘라내기·붙여넣기, 검색, 휴지통·복원 및 연결 종료 시 작업 정리.
+- Mac Swift 컴파일·앱 패키징 성공. Apple Silicon arm64, macOS 13 이상.
+- 클립보드 JCE ↔ CryptoKit 암호화 상호 운용, 잘못된 키·변조·만료 메시지 거부 및 최대 이스케이프 텍스트 검사 통과.
+- 실제 Mac 송수신 코드와 JCE 테스트 클라이언트 사이 TCP 양방향 파일 전송 통과: 방향별 196,665바이트, AES-GCM·SHA-256·저장 완료 응답. 잘못된 해시 거부, 기존 파일 보존, 임시 파일 정리 확인.
+- QR 비트맵을 별도 ZXing 디코더로 읽어 URI·연결 키 보존 확인.
+- 네이티브 Mac 화면 4종 렌더링·시각 확인. 미리보기 기기 및 파일은 샘플 데이터다.
+- Android 클립보드는 이벤트 기반이며 주기적인 클립보드 조회 타이머·WakeLock·READ_LOGS·위치·Bluetooth 검색 권한이 없는 것을 코드로 확인했다.
+
+## 검증의 한계
+
+0.1.0의 실제 클립보드 공유는 사용자가 확인했다. 이번 버전을 사용자 휴대폰에 설치하거나 실행 중인 Mac 앱으로 교체하지 않았다. 테스트는 별도 일회성 에뮬레이터와 합성 파일을 사용했다.
+
+실제 갤럭시와 Mac 사이의 QR 연결, BLE 탐색기 요청, Finder 드래그, 폴더 전송, 절전·재부팅 복구, 장시간 배터리 소모는 아직 검증하지 않았다. 로컬 TCP 검사는 실제 무선 연결이나 전체 Android 전송 경로를 검증한 것은 아니다.
+
+파일 내용 전송은 같은 Wi-Fi에서 파일당 256MiB까지 지원한다. 휴대폰 내부 파일의 복사/이동에는 이 크기 제한이 없다. 공유 내부 저장소만 대상으로 하며 보호된 앱 데이터·시스템 폴더는 접근하지 않는다. 폴더 작업 도중 오류가 나면 완료된 일부 작업은 남을 수 있다.
+
+Mac 앱은 개인용 ad-hoc 서명이며 Apple 공증은 받지 않았다. Android APK는 기존 CoolSync와 같은 개발 인증서로 서명했다.
+
+## 입력창 및 탐색 구조 수정
+
+버전은 유지했다. 새 작업 경로에서 Android assembleDebug/lintDebug 및 Mac 빌드를 통과했다. Android 에뮬레이터에서 네 탭 전환, 입력창 열기·취소, 잘못된 키의 인라인 오류와 창 유지, 가로 화면, 연결 진단 창, 프로세스 생존 검사를 통과했다. 실제 스크린샷은 design/previews/android-connection.png, android-pairing.png, android-input-error.png, android-pairing-landscape.png, android-diagnostics.png이다. Mac 탐색기 RPC 회귀 검사도 통과했다. 실제 기기 무선 연결의 실패 원인은 미확정이다.
