@@ -106,7 +106,7 @@ object FilesBridge {
                 expiry?.let(main::removeCallbacks); busy=true; progress=0
                 worker.execute { transfer(c,m,JSONObject(message.getString("text")),generation) }
             }
-            "fileReject" -> { cancel(); state(c,"상대 기기에서 전송을 취소했습니다") }
+            "fileReject" -> { if(message.optString("ref")==offer?.optString("id")){cancel();state(c,"상대 기기에서 전송을 취소했습니다")} }
         }
     }
     fun accept(c: Context, uri: Uri) { val m=offer ?: return; destination=uri; SyncService.active?.sendControl("fileAccept",ref=m.getString("id")); state(c,"파일 연결 준비 중"); arm(c) }

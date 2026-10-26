@@ -3,6 +3,7 @@ import CryptoKit
 
 struct PhotoCatalog:Codable {
     var revision=""
+    var dateSchema:Int?
     var items:[PhotoItem]=[]
     var albums:[PhotoAlbum]=[]
     var synced:Date?
@@ -55,6 +56,11 @@ final class PhotoLibraryCache {
         let rows=files.compactMap{url->(URL,Int64,Date)? in guard let v=try?url.resourceValues(forKeys:[.fileSizeKey,.contentModificationDateKey])else{return nil};return(url,Int64(v.fileSize ?? 0),v.contentModificationDate ?? .distantPast)}
         var total=rows.reduce(Int64(0)){$0+$1.1}
         for(url,size,_)in rows.sorted(by:{a,b in let am=a.0.deletingLastPathComponent().lastPathComponent=="motion",bm=b.0.deletingLastPathComponent().lastPathComponent=="motion";return am != bm ? am:a.2<b.2}) where total>budget && !excluding.union(protected).contains(url){if (try?fm.removeItem(at:url)) != nil{total-=size}}
+    }
+    func rekey(_ old:PhotoItem,_ new:PhotoItem)throws{
+        guard old.path==new.path,old.size==new.size,old.cacheIdentity != new.cacheIdentity else{return}
+        let pairs=[(originalURL(old),originalURL(new)),(thumbnailURL(old),thumbnailURL(new)),(motionURL(old),motionURL(new)),(folder.appendingPathComponent("details/"+digest(old)+".json"),folder.appendingPathComponent("details/"+digest(new)+".json"))]
+        for(source,target)in pairs where fm.fileExists(atPath:source.path) && !fm.fileExists(atPath:target.path){try fm.moveItem(at:source,to:target)}
     }
     func discard(_ item:PhotoItem,trashOriginal:Bool)throws{
         let original=originalURL(item)

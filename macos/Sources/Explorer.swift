@@ -32,6 +32,7 @@ final class ExplorerModel:ObservableObject {
     var send:((String,String,String)->Void)?
     var connected:(()->Bool)?
     weak var files:FileTransfer?
+    private var quietCalls=Set<String>()
     private var callbacks:[String:([String:Any])->Void]=[:]
     private var timers:[String:DispatchWorkItem]=[:]
     private var history:[String]=[]
@@ -52,19 +53,20 @@ final class ExplorerModel:ObservableObject {
             return ascending ? result:!result
         }
     }
-    func call(_ op:String,_ fields:[String:Any]=[:],completion:@escaping([String:Any])->Void){
-        guard connected?()==true else{fail("휴대폰이 연결되어 있지 않습니다");completion(["ok":false]);return}
+    func call(_ op:String,_ fields:[String:Any]=[:],quiet:Bool=false,completion:@escaping([String:Any])->Void){
+        guard connected?()==true else{if !quiet{fail("휴대폰이 연결되어 있지 않습니다")};completion(["ok":false,"error":"휴대폰이 연결되어 있지 않습니다"]);return}
         let id=UUID().uuidString;var q=fields;q["op"]=op
         guard let data=try? JSONSerialization.data(withJSONObject:q),let text=String(data:data,encoding:.utf8)else{return}
-        callbacks[id]=completion
-        let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.fail("기기 응답 시간이 지났습니다");callback(["ok":false,"error":"응답 시간 초과"])}
-        timers[id]=timer;let timeout:Double=["mediaCopy","mediaMove","mediaAlbumRename","mediaAlbumTrash"].contains(op) ? 600:45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
+        callbacks[id]=completion;if quiet{quietCalls.insert(id)}
+        let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.quietCalls.remove(id);if !quiet{self.fail("기기 응답 시간이 지났습니다")};callback(["ok":false,"error":"응답 시간 초과"])}
+        timers[id]=timer;let timeout:Double=["mediaSync","mediaSession","mediaAlignDates"].contains(op) ? 180:["mediaCopy","mediaMove","mediaAlbumRename","mediaAlbumTrash"].contains(op) ? 600:45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
     }
+    func callPhoto(_ op:String,_ fields:[String:Any]=[:],completion:@escaping([String:Any])->Void){call(op,fields,quiet:true,completion:completion)}
     func handle(_ m:Wire.Message){
         guard let data=m.text.data(using:.utf8),let response=try? JSONSerialization.jsonObject(with:data)as?[String:Any]else{return}
         timers.removeValue(forKey:m.ref)?.cancel();guard let callback=callbacks.removeValue(forKey:m.ref)else{return}
         if response["code"]as?String=="setup"{needsSetup=true}
-        if response["ok"]as?Bool != true{fail(response["error"]as?String ?? "파일 작업을 완료하지 못했습니다")}
+        if quietCalls.remove(m.ref)==nil && response["ok"]as?Bool != true{fail(response["error"]as?String ?? "파일 작업을 완료하지 못했습니다")}
         callback(response)
     }
     private func fail(_ message:String){busy=false;status=message;error=message}
@@ -178,7 +180,7 @@ final class ExplorerModel:ObservableObject {
         }
     }
     func connectionEnded(){
-        jobDeadline?.cancel();for timer in timers.values{timer.cancel()};timers=[:];callbacks=[:]
+        jobDeadline?.cancel();for timer in timers.values{timer.cancel()};timers=[:];callbacks=[:];quietCalls=[]
         jobs=[];queueActive=false;files?.expectedDownloads=[:];files?.onCompletion=nil;files?.cancel(notify:false)
         let completion=promisedCompletion;promisedCompletion=nil;completion?(CocoaError(.userCancelled))
         let promises=promiseQueue;promiseQueue=[];for request in promises{request.2(CocoaError(.userCancelled))}

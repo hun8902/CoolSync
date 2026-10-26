@@ -42,12 +42,14 @@ object GalleryMedia {
     if(runCatching{fs.resolve(path)}.isFailure)continue
     val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
     val taken=long(6)
-    val added=long(11)*1000;val modified=long(5)*1000
-    val date=when{taken>0->taken;added>0->added;else->modified}
-    val source=when{taken>0->"captured";added>0->"added";modified>0->"modified";else->"unknown"}
+    val added=long(11)*1000;val modified=(file.lastModified()/1000)*1000
+    val original=CaptureDates.read(c,file,mime)
+    val date=when{original.time>0->original.time;taken>0->taken;added>0->added;else->modified}
+    val source=when{original.time>0->original.source;taken>0->"captured";added>0->"added";modified>0->"modified";else->"unknown"}
     result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),date,modified,long(7).toInt(),long(8).toInt(),long(9),long(10),added,source))
    }
   }
+  CaptureDates.flush(c)
   result.sortWith(compareByDescending<Item>{it.date}.thenByDescending{it.id});cached=result;cachedAt=System.currentTimeMillis();return result
  }
  fun syncRows(c:Context):List<JSONObject>{invalidate();val favorite=favorites(c);return items(c).map{it.json(favorite)}}
@@ -62,6 +64,7 @@ object GalleryMedia {
   when(q.getString("op")){
    "mediaSync"->GallerySync.sync(c,q,out)
    "mediaTrashChecked"->GallerySync.trash(c,q,out)
+   "mediaAlignDates"->alignDates(c,q,out)
    "mediaSession"->out.put("endpoint",GalleryServer.open(c as SyncService))
    "mediaClose"->GalleryServer.close()
    "mediaAlbums"->{
@@ -96,6 +99,30 @@ object GalleryMedia {
    "mediaAlbumTrash"->{val path=q.getString("path");require(path.isNotEmpty());val old=items(c).filter{it.path.startsWith(path+"/")}.map{it.path};StorageBridge.engine(c).discard(listOf(path));val albums=(prefs(c).getStringSet("albums",emptySet()) ?: emptySet()).toMutableSet();albums.remove(path);prefs(c).edit().putStringSet("albums",albums).commit();rescan(c,old)}
    else->throw StorageFault("operation","지원하지 않는 사진 작업입니다")
   }
+ }
+ private fun alignDates(c:Context,q:JSONObject,out:JSONObject){
+  val requested=q.getJSONArray("items");if(requested.length() !in 1..20)throw StorageFault("selection","한 번에 20개 이하를 선택하세요")
+  val current=items(c).associateBy{it.path};val result=JSONArray();val changed=mutableListOf<String>();val history=c.getSharedPreferences("capture-date-history",0)
+  for(i in 0 until requested.length()){
+   val expected=requested.getJSONObject(i);val path=expected.getString("path");val row=JSONObject().put("path",path)
+   try{
+    val item=current[path] ?: throw StorageFault("missing","사진을 찾지 못했습니다")
+    if(item.id.toString()!=expected.getString("id")||item.size!=expected.getLong("size")||item.modified!=expected.getLong("modified")||item.generation!=expected.optLong("generation"))throw StorageFault("conflict","사진 정보가 변경되었습니다. 먼저 동기화하세요")
+    val file=file(c,path);val capture=CaptureDates.read(c,file,item.mime)
+    if(capture.source!="exif"||capture.time<=0){row.put("status","skipped")}
+    else if(file.lastModified()==capture.time){row.put("status","unchanged")}
+    else{
+     if(file.length()!=item.size||file.lastModified()/1000!=item.modified/1000)throw StorageFault("conflict","파일이 변경되어 날짜를 수정하지 않았습니다")
+     if(!history.contains(path))history.edit().putLong(path,file.lastModified()).commit()
+     if(!file.setLastModified(capture.time))throw StorageFault("write","파일 수정일을 바꾸지 못했습니다")
+     changed.add(path);row.put("status","updated")
+    }
+   }catch(e:Exception){row.put("status","failed").put("error",e.message ?: "수정일을 변경하지 못했습니다")}
+   result.put(row)
+  }
+  rescan(c,changed);invalidate();val after=items(c).associateBy{it.path};val favorite=favorites(c)
+  for(i in 0 until result.length()){val row=result.getJSONObject(i);if(row.optString("status") in setOf("updated","unchanged"))after[row.getString("path")]?.let{row.put("item",it.json(favorite))}}
+  out.put("results",result)
  }
  private fun paths(q:JSONObject):List<String>{val array=q.getJSONArray("paths");if(array.length()>500)throw StorageFault("size","한 번에 500개 이하를 선택하세요");return(0 until array.length()).map{array.getString(it)}}
  fun thumbnail(c:Context,path:String):ByteArray{

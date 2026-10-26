@@ -1,0 +1,61 @@
+package app.coolsync
+
+import android.content.Context
+import android.media.MediaMetadataRetriever
+import android.util.AtomicFile
+import androidx.exifinterface.media.ExifInterface
+import org.json.JSONObject
+import java.io.File
+import java.security.MessageDigest
+import java.text.ParsePosition
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
+
+/** Original capture metadata is cached per file version; no background scanning. */
+object CaptureDates {
+ data class Result(val time:Long,val source:String)
+ private var values:JSONObject?=null
+ private var dirty=false
+ @Synchronized fun read(c:Context,file:File,mime:String):Result {
+  if(values==null)values=runCatching{JSONObject(AtomicFile(File(c.filesDir,"capture-dates-v1.json")).readFully().toString(Charsets.UTF_8))}.getOrDefault(JSONObject())
+  val key=MessageDigest.getInstance("SHA-256").digest("${file.path}|${file.length()}|${file.lastModified()}".toByteArray()).joinToString(""){"%02x".format(it)}
+  values!!.optJSONObject(key)?.let{return Result(it.optLong("time"),it.optString("source"))}
+  val result=runCatching{if(mime.startsWith("video/"))video(file)else image(file)}.getOrDefault(Result(0,""))
+  values!!.put(key,JSONObject().put("time",result.time).put("source",result.source));dirty=true
+  return result
+ }
+ private fun parse(text:String,pattern:String,zone:TimeZone):Long {
+  val format=SimpleDateFormat(pattern,Locale.US);format.isLenient=false;format.timeZone=zone
+  val position=ParsePosition(0);val date=format.parse(text,position)
+  return if(date!=null&&position.index==text.length)date.time.coerceAtLeast(0)else 0
+ }
+ private fun image(file:File):Result {
+  val exif=ExifInterface(file)
+  val original=exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)?.trim() ?: return Result(0,"")
+  val offset=exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)?.trim()
+  val zone=if(offset!=null&&offset.matches(Regex("[+-][0-9]{2}:[0-9]{2}")))TimeZone.getTimeZone("GMT$offset")else TimeZone.getDefault()
+  val base=parse(original,"yyyy:MM:dd HH:mm:ss",zone)
+  val fraction=exif.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL)?.takeWhile{it.isDigit()}?.take(3)?.padEnd(3,'0')?.toLongOrNull() ?: 0
+  return if(base>0)Result(base+fraction,"exif")else Result(0,"")
+ }
+ private fun video(file:File):Result {
+  val retriever=MediaMetadataRetriever()
+  try {
+   retriever.setDataSource(file.path)
+   val value=retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)?.trim() ?: return Result(0,"")
+   val zone=TimeZone.getTimeZone("UTC")
+   for(pattern in listOf("yyyyMMdd'T'HHmmss.SSSX","yyyyMMdd'T'HHmmssX","yyyy-MM-dd'T'HH:mm:ss.SSSX","yyyy-MM-dd'T'HH:mm:ssX","yyyyMMdd'T'HHmmss")){
+    val time=parse(value,pattern,zone);if(time>0)return Result(time,"video")
+   }
+   return Result(0,"")
+  }finally{retriever.release()}
+ }
+ @Synchronized fun flush(c:Context){
+  if(!dirty)return
+  val entries=values ?: return
+  if(entries.length()>25000){val keys=entries.keys().asSequence().take(entries.length()-20000).toList();keys.forEach{entries.remove(it)}}
+  val atomic=AtomicFile(File(c.filesDir,"capture-dates-v1.json"))
+  runCatching{val output=atomic.startWrite();try{output.write(entries.toString().toByteArray());atomic.finishWrite(output);dirty=false}catch(e:Exception){atomic.failWrite(output);throw e}}
+ }
+}

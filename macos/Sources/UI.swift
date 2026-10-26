@@ -37,7 +37,7 @@ final class DashboardModel: ObservableObject {
                 if wasConnected && !value.authenticated { self.explorer.connectionEnded();self.photos.connectionEnded() }
                 if value.authenticated { self.pairing=false; if !wasConnected { self.refreshNotificationPermission();self.photos.reconnected();self.explorer.reload() } }
             }
-            photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.error=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
+            photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.status=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
             value.phoneNotification={ [weak self] app,title,body,package,icon,finished in
                 PhoneNotificationIcons.shared.cache(package:package,encodedIcon:icon)
                 func result(_ text:String){DispatchQueue.main.async{self?.notificationStatus=text};finished(text)}

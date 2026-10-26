@@ -29,7 +29,7 @@ object StorageBridge {
                 if(SyncService.active!==service || !service.authenticated || !sessionKey.contentEquals(Protocol.key(service) ?: byteArrayOf())) return@execute
                 val q=JSONObject(message.getString("text"));val fs=engine(service);val path=q.optString("path")
                 java.util.UUID.fromString(reference)
-                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent","mediaFavorite","mediaAlbumCreate","mediaAlbumRename","mediaMove","mediaCopy","mediaTrash","mediaAlbumTrash")){
+                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent","mediaAlignDates","mediaFavorite","mediaAlbumCreate","mediaAlbumRename","mediaMove","mediaCopy","mediaTrash","mediaAlbumTrash")){
                     val prefs=service.getSharedPreferences("fs-replay",0)
                     val seen=(prefs.getStringSet("ids",emptySet()) ?: emptySet()).toMutableSet()
                     if(reference in seen)throw StorageFault("duplicate","이미 처리한 요청입니다. 목록을 새로 고침하세요.")
