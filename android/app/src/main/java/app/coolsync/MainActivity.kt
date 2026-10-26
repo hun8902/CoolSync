@@ -268,7 +268,7 @@ class MainActivity:Activity() {
     }
     private fun captureNow(){
         try{val cb=getSystemService(android.content.ClipboardManager::class.java);val clip=cb.primaryClip ?: return;val desc=cb.primaryClipDescription;if(desc?.extras?.getBoolean("android.content.extra.IS_SENSITIVE",false)==true){toast("민감한 내용은 기록하지 않습니다");return};val item=clip.getItemAt(0);val uri=item.uri
-            if(uri!=null&&contentResolver.getType(uri)?.startsWith("image/")==true){val file=ClipHistory.normalized(this,uri);ClipHistory.image(this,file,"휴대폰");SyncService.active?.localImage(Uri.fromFile(file),false)}else item.text?.toString()?.let{ClipHistory.text(this,it,"휴대폰");SyncService.active?.localCopy(it)};render()
+            if(uri!=null&&contentResolver.getType(uri)?.startsWith("image/")==true){val file=ClipHistory.normalized(this,uri);ClipHistory.image(this,file,"휴대폰");val sync=SyncService.active;if(sync?.authenticated==true&&!FilesBridge.busy&&FilesBridge.offer==null)sync.localImage(Uri.fromFile(file),false)else file.delete()}else item.text?.toString()?.let{ClipHistory.text(this,it,"휴대폰");SyncService.active?.localCopy(it)};render()
         }catch(_:Exception){toast("이 이미지에 접근할 수 없습니다. 원본 앱에서 공유 기능을 사용해 주세요")}
     }
     private fun updateSheet(){

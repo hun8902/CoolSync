@@ -56,7 +56,7 @@ object FilesBridge {
         state(c,"파일 확인 중")
         worker.execute {
             try {
-                val source=if(clipboardImage){val f=ClipHistory.normalized(c,uri);clipboardStaged=f;if(recordImage)ClipHistory.image(c,f,"휴대폰");Uri.fromFile(f)}else uri
+                val source=if(clipboardImage){val f=ClipHistory.normalized(c,uri);if(uri.scheme=="file"){val old=java.io.File(uri.path!!);if(old.canonicalFile.parentFile==java.io.File(c.cacheDir,"clip-staging").canonicalFile)old.delete()};clipboardStaged=f;if(recordImage)ClipHistory.image(c,f,"휴대폰");Uri.fromFile(f)}else uri
                 if(epoch!=generation){if(clipboardImage)java.io.File(source.path!!).delete();return@execute}
                 selected=source
                 var name="공유 파일"
