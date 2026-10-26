@@ -20,7 +20,7 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-/** Wi-Fi is used only for explicit file transfers. No polling, discovery, cloud, or wake lock. */
+/** Wi-Fi is used only for explicit file transfers. No polling, discovery or cloud; CPU held only while working. */
 object FilesBridge {
     const val LIMIT = 8589934592L
     var offer: JSONObject? = null; private set
@@ -55,6 +55,7 @@ object FilesBridge {
         cancel(); selected=uri; busy=true; val generation=epoch; val copiedAt=System.currentTimeMillis()
         state(c,"파일 확인 중")
         worker.execute {
+            val power=TransferPower.acquire(c)
             try {
                 val source=if(clipboardImage){val f=ClipHistory.normalized(c,uri);if(uri.scheme=="file"){val old=java.io.File(uri.path!!);if(old.canonicalFile.parentFile==java.io.File(c.cacheDir,"clip-staging").canonicalFile)old.delete()};clipboardStaged=f;if(recordImage)ClipHistory.image(c,f,"휴대폰");Uri.fromFile(f)}else uri
                 if(epoch!=generation){if(clipboardImage)java.io.File(source.path!!).delete();return@execute}
@@ -71,6 +72,7 @@ object FilesBridge {
                 if(remotePath!=null) meta.put("remote",remotePath)
                 main.post { if(epoch==generation) { offer=meta; busy=false; SyncService.active?.sendControl("fileOffer",meta.toString(),meta.getString("id")); arm(c); state(c,"Mac에서 수신을 승인해 주세요") } }
             } catch(e: Exception) { main.post { if(epoch==generation) { clipboardStaged?.delete();clipboardStaged=null;busy=false; state(c,e.message ?: "파일을 읽지 못했습니다") } } }
+            finally {power.close()}
         }
     }
     fun handle(c: Context, message: JSONObject) {
@@ -110,6 +112,7 @@ object FilesBridge {
     fun accept(c: Context, uri: Uri) { val m=offer ?: return; destination=uri; SyncService.active?.sendControl("fileAccept",ref=m.getString("id")); state(c,"파일 연결 준비 중"); arm(c) }
     fun reject(c: Context) { offer?.let { SyncService.active?.sendControl("fileReject",ref=it.optString("id")) }; cancel(); c.getSystemService(android.app.NotificationManager::class.java).cancel(20); state(c,"파일 요청을 거절했습니다") }
     private fun transfer(c: Context, meta: JSONObject, endpoint: JSONObject, generation: Int) {
+        val power=TransferPower.acquire(c)
         var success=false
         val target=destination
         val sourceUri=selected
@@ -158,6 +161,7 @@ object FilesBridge {
             if(epoch==generation) state(c,"${meta.getString("name")} · 전송 완료")
         } catch(e: Exception) { if(epoch==generation) state(c,e.message ?: "파일 전송 실패") }
         finally {
+            power.close()
             if(meta.optBoolean("clipboard")){if(meta.optString("flow")=="download")target?.path?.let{java.io.File(it).delete()}else sourceUri?.path?.let{java.io.File(it).delete()}}
             if(!success && target!=null) { if(managed!=null) managed.temporary.delete() else try { DocumentsContract.deleteDocument(c.contentResolver,target) } catch (_: Exception) {} }
             if(epoch==generation) main.post { if(epoch!=generation) return@post; socket=null; busy=false; offer=null; selected=null; destination=null; managedUpload=null;clipboardStaged=null; progress=if(success) 100 else 0; c.sendBroadcast(android.content.Intent(SyncService.STATE).setPackage(c.packageName)) }

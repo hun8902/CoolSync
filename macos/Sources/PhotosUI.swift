@@ -16,13 +16,14 @@ struct PhotosPane:View {
         HStack(spacing:0){
             if photos.sidebarShown{sidebar.frame(width:215).background(.ultraThinMaterial);Divider()}
             VStack(spacing:0){toolbar;Divider();HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1:0);if photos.items.isEmpty && !photos.loading && photos.preview==nil{VStack(spacing:12){Image(systemName:"photo.on.rectangle").font(.system(size:35,weight:.light)).foregroundStyle(.tertiary);Text(photos.connected?()==true ? "사진이나 영상이 없습니다":"휴대폰을 연결하세요").foregroundStyle(.secondary);Button("새로 고침"){photos.reload()}}};if let item=photos.preview{viewer(item)}};if photos.infoShown{Divider();inspector.frame(width:275)}};Divider();footer}
-        }.onDrop(of:[UTType.fileURL.identifier,photoPathType.rawValue],isTargeted:nil){drop($0,to:photos.album.isEmpty ? "Pictures/CoolSync":photos.album)}.animation(reduceMotion ? nil:.easeInOut(duration:0.18),value:photos.sidebarShown)
+        }.background(Color(nsColor:.textBackgroundColor)).onDrop(of:[UTType.fileURL.identifier,photoPathType.rawValue],isTargeted:nil){drop($0,to:photos.album.isEmpty ? "Pictures/CoolSync":photos.album)}.animation(reduceMotion ? nil:.easeInOut(duration:0.18),value:photos.sidebarShown)
         .onAppear{photos.appear()}.onDisappear{photos.disappear()}
+        .sheet(isPresented:$photos.showPendingDeletes){PendingPhotoDeletesPane(photos:photos)}
         .alert("사진 작업",isPresented:Binding(get:{photos.error != nil},set:{if !$0{photos.error=nil}})){Button("확인"){photos.error=nil}}message:{Text(photos.error ?? "")}
     }
     private var sidebar:some View{
         VStack(alignment:.leading,spacing:0){
-            Button(action:exit){Label("CoolSync",systemImage:"chevron.left").font(.system(size:14,weight:.semibold))}.buttonStyle(.plain).padding(.horizontal,18).padding(.vertical,19)
+            Button{photos.sidebarShown=false}label:{Label("앨범",systemImage:"sidebar.left").font(.system(size:14,weight:.semibold))}.buttonStyle(.plain).padding(.horizontal,18).padding(.vertical,19)
             ScrollView{VStack(alignment:.leading,spacing:3){
                 side("보관함","photo.on.rectangle","all")
                 Text("고정됨").font(.system(size:11,weight:.semibold)).foregroundStyle(.secondary).padding(.top,23).padding(.bottom,6).padding(.leading,12)
@@ -45,7 +46,7 @@ struct PhotosPane:View {
         HStack(spacing:14){Button{photos.sidebarShown.toggle()}label:{Image(systemName:"sidebar.left")};if photos.preview != nil{Button{photos.closePreview()}label:{Image(systemName:"chevron.left")}};Text(photos.title).font(.system(size:16,weight:.semibold)).lineLimit(1);Spacer()
             Button{photos.chooseImport()}label:{Image(systemName:"square.and.arrow.down")}
             Button{photos.toggleInfo()}label:{Image(systemName:"info.circle")}
-            Menu{Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")};Slider(value:$photos.zoom,in:90...240);Button("새로 고침"){photos.reload()};Button("Mac으로 복사…"){photos.export()};Button("Mac으로 이동…"){photos.export(move:true)};Button("즐겨찾기"){photos.favorite()};Button("휴지통으로 이동…"){photos.remove()};Button("새 앨범…"){photos.albumCreate()};Menu("앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}}}label:{Image(systemName:"ellipsis.circle")}
+            Menu{Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")};Slider(value:$photos.zoom,in:90...240);Button("변경분 동기화"){photos.reload()};Button("선택 원본 보관"){photos.cacheSelection()};Button("삭제 대기 목록"){photos.showPendingDeletes=true};Button("Mac으로 복사…"){photos.export()};Button("Mac으로 이동…"){photos.export(move:true)};Button("즐겨찾기"){photos.favorite()};Button("휴지통으로 이동…"){photos.remove()};Button("새 앨범…"){photos.albumCreate()};Menu("앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}}}label:{Image(systemName:"ellipsis.circle")}
         }.buttonStyle(.borderless).padding(16).background(.ultraThinMaterial)
     }
     private var wideToolbar:some View{
@@ -64,7 +65,7 @@ struct PhotosPane:View {
                 Button{photos.favorite()}label:{Image(systemName:photos.selected.allSatisfy{$0.favorite} && !photos.selection.isEmpty ? "heart.fill":"heart")}.disabled(photos.selection.isEmpty).help("즐겨찾기")
                 Button{photos.remove()}label:{Image(systemName:"trash")}.disabled(photos.selection.isEmpty).help("선택 항목 삭제")
                 Button{photos.toggleInfo()}label:{Image(systemName:"info.circle")}.help("촬영 정보와 위치")
-                Menu{Button("새 앨범…"){photos.albumCreate()};Menu("선택 항목을 앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}};Menu("선택 항목을 앨범으로 복사"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path,copy:true)}}};Button("새로 고침"){photos.reload()}}label:{Image(systemName:"ellipsis")}
+                Menu{Button("새 앨범…"){photos.albumCreate()};Menu("선택 항목을 앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}};Menu("선택 항목을 앨범으로 복사"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path,copy:true)}}};Button("선택 원본 보관"){photos.cacheSelection()};Button("삭제 대기 목록"){photos.showPendingDeletes=true};Button("변경분 동기화"){photos.reload()}}label:{Image(systemName:"ellipsis")}
             }.padding(10).background(.thinMaterial,in:Capsule())
             if photos.preview==nil{TextField("검색",text:$photos.search).textFieldStyle(.roundedBorder).frame(width:115)}
         }.buttonStyle(.borderless).padding(.horizontal,16).padding(.vertical,13).background(.ultraThinMaterial)
@@ -79,7 +80,7 @@ struct PhotosPane:View {
             HStack{Button{photos.nextPreview(-1)}label:{Image(systemName:"chevron.left").font(.system(size:20)).padding(14).background(.ultraThinMaterial,in:Circle())};Spacer();Button{photos.nextPreview(1)}label:{Image(systemName:"chevron.right").font(.system(size:20)).padding(14).background(.ultraThinMaterial,in:Circle())}}.buttonStyle(.plain).padding(15)
         }
     }
-    private var footer:some View{HStack{if photos.loading{ProgressView().controlSize(.small)};Text(photos.status);if !photos.selection.isEmpty{Text("· \(photos.selection.count)개 선택")};Spacer();if files.hasTransfer{Text(files.summary).lineLimit(1);if files.busy{ProgressView(value:files.progress).frame(width:95)};Button("취소"){photos.rpc?.cancelJobs()}}}.font(.system(size:11)).foregroundStyle(.secondary).padding(.horizontal,18).padding(.vertical,11).background(.ultraThinMaterial)}
+    private var footer:some View{HStack{if photos.loading || photos.caching{ProgressView().controlSize(.small)};Text(photos.status).lineLimit(1);if !photos.pendingDeletes.isEmpty{Button("삭제 대기 \(photos.pendingDeletes.count)"){photos.showPendingDeletes=true}.buttonStyle(.borderless)};if !photos.selection.isEmpty{Text("· \(photos.selection.count)개 선택")};Spacer();if files.hasTransfer{Text(files.summary).lineLimit(1);if files.busy{ProgressView(value:files.progress).frame(width:95)};Button("취소"){photos.rpc?.cancelJobs()}}}.font(.system(size:11)).foregroundStyle(.secondary).padding(.horizontal,18).padding(.vertical,11).background(.ultraThinMaterial)}
     private var inspector:some View{
         ScrollView{VStack(alignment:.leading,spacing:17){
             Text("정보").font(.system(size:17,weight:.semibold))
@@ -146,7 +147,7 @@ struct PhotoGrid:NSViewRepresentable {
         init(_ model:PhotosModel){self.model=model}
         func numberOfSections(in collectionView:NSCollectionView)->Int{sections.count}
         func collectionView(_ collectionView:NSCollectionView,numberOfItemsInSection section:Int)->Int{sections[section].items.count}
-        func collectionView(_ collectionView:NSCollectionView,itemForRepresentedObjectAt indexPath:IndexPath)->NSCollectionViewItem{let tile=collectionView.makeItem(withIdentifier:.init("photo"),for:indexPath)as!PhotoTile;let item=sections[indexPath.section].items[indexPath.item];tile.representedObject=item.path;tile.imageView?.image=NSImage(systemSymbolName:item.video ? "video":"photo",accessibilityDescription:nil);tile.imageView?.contentTintColor = .tertiaryLabelColor;tile.badge.stringValue=item.video ? item.durationText:(item.favorite ? "♥":"");tile.badge.isHidden = !item.video && !item.favorite;tile.view.toolTip=item.name;model.thumbnails.load(item){[weak tile]image in guard let tile,tile.representedObject as?String==item.path,let image else{return};tile.imageView?.image=image;tile.imageView?.contentTintColor=nil};return tile}
+        func collectionView(_ collectionView:NSCollectionView,itemForRepresentedObjectAt indexPath:IndexPath)->NSCollectionViewItem{let tile=collectionView.makeItem(withIdentifier:.init("photo"),for:indexPath)as!PhotoTile;let item=sections[indexPath.section].items[indexPath.item];tile.representedObject=item.cacheIdentity;tile.imageView?.image=NSImage(systemSymbolName:item.video ? "video":"photo",accessibilityDescription:nil);tile.imageView?.contentTintColor = .tertiaryLabelColor;tile.badge.stringValue=item.video ? item.durationText:(item.favorite ? "♥":"");tile.badge.isHidden = !item.video && !item.favorite;tile.view.toolTip=item.name;model.thumbnails.load(item){[weak tile]image in guard let tile,tile.representedObject as?String==item.cacheIdentity,let image else{return};tile.imageView?.image=image;tile.imageView?.contentTintColor=nil};return tile}
         func collectionView(_ collectionView:NSCollectionView,viewForSupplementaryElementOfKind kind:NSCollectionView.SupplementaryElementKind,at indexPath:IndexPath)->NSView{let view=collectionView.makeSupplementaryView(ofKind:kind,withIdentifier:.init("header"),for:indexPath)as!PhotoHeader;view.label.stringValue=sections[indexPath.section].title;return view}
         func collectionView(_ collectionView:NSCollectionView,didSelectItemsAt indexPaths:Set<IndexPath>){sync(collectionView)}
         func collectionView(_ collectionView:NSCollectionView,didDeselectItemsAt indexPaths:Set<IndexPath>){sync(collectionView)}
@@ -154,10 +155,10 @@ struct PhotoGrid:NSViewRepresentable {
         @objc func open(_ gesture:NSClickGestureRecognizer){guard let collection,let p=collection.indexPathForItem(at:gesture.location(in:collection)),sections.indices.contains(p.section),sections[p.section].items.indices.contains(p.item)else{return};model.open(sections[p.section].items[p.item])}
         @objc func openSelected(){if let item=model.selected.first{model.open(item)}}
         @objc func exportCopy(){model.export()};@objc func exportMove(){model.export(move:true)};@objc func favorite(){model.favorite()};@objc func remove(){model.remove()}
-        func collectionView(_ collectionView:NSCollectionView,canDragItemsAt indexPaths:Set<IndexPath>,with event:NSEvent)->Bool{model.connected?()==true && model.files?.hasTransfer != true}
+        func collectionView(_ collectionView:NSCollectionView,canDragItemsAt indexPaths:Set<IndexPath>,with event:NSEvent)->Bool{model.files?.hasTransfer != true && (model.connected?()==true || model.selected.allSatisfy{model.isCached($0)})}
         func collectionView(_ collectionView:NSCollectionView,pasteboardWriterForItemAt indexPath:IndexPath)->NSPasteboardWriting?{let item=sections[indexPath.section].items[indexPath.item];let provider=RemotePromise(fileType:UTType(filenameExtension:URL(fileURLWithPath:item.name).pathExtension)?.identifier ?? UTType.data.identifier,delegate:self);provider.remotePath=item.path;provider.keeper=self;provider.userInfo=item.remote;return provider}
         func filePromiseProvider(_ provider:NSFilePromiseProvider,fileNameForType type:String)->String{(provider.userInfo as?RemoteEntry)?.name ?? "사진"}
-        func filePromiseProvider(_ provider:NSFilePromiseProvider,writePromiseTo url:URL,completionHandler:@escaping(Error?)->Void){guard let item=provider.userInfo as?RemoteEntry else{completionHandler(CocoaError(.fileReadUnknown));return};DispatchQueue.main.async{self.model.rpc?.promise(item,to:url,completion:completionHandler)}}
+        func filePromiseProvider(_ provider:NSFilePromiseProvider,writePromiseTo url:URL,completionHandler:@escaping(Error?)->Void){guard let item=provider.userInfo as?RemoteEntry else{completionHandler(CocoaError(.fileReadUnknown));return};DispatchQueue.main.async{guard let photo=self.model.items.first(where:{$0.path==item.path})else{completionHandler(CocoaError(.fileReadNoSuchFile));return};self.model.promiseExport(photo,to:url,completion:completionHandler)}}
         func operationQueue(for provider:NSFilePromiseProvider)->OperationQueue{.main}
     }
 }

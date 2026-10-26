@@ -18,6 +18,8 @@ class SyncService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("sync",0) }
     private var receiverRegistered = false
+    private val mediaChanged=Runnable{if(authenticated)sendControl("mediaChanged")}
+    private val mediaObserver=object:android.database.ContentObserver(main){override fun onChange(selfChange:Boolean){main.removeCallbacks(mediaChanged);main.postDelayed(mediaChanged,1200)}}
     private var server: BluetoothGattServer? = null
     private var bleGeneration=0
     private var advertiser: BluetoothLeAdvertiser? = null
@@ -108,6 +110,7 @@ class SyncService : Service() {
         super.onCreate()
         if(checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return }
         active = this
+        runCatching{contentResolver.registerContentObserver(android.provider.MediaStore.Files.getContentUri("external"),true,mediaObserver)}
         seen.addAll(prefs.getStringSet("seen",emptySet()) ?: emptySet())
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("sync","CoolSync 연결",NotificationManager.IMPORTANCE_LOW))
@@ -276,6 +279,7 @@ class SyncService : Service() {
         try { advertiser?.stopAdvertising(advert); peer?.let { server?.cancelConnection(it) }; server?.close() } catch (_: Exception) {}
         server = null; advertiser = null; resetPeer()
     }
-    override fun onDestroy() { FilesBridge.cancel(); active = null; closeBle(); if(receiverRegistered) unregisterReceiver(bluetoothReceiver); main.removeCallbacksAndMessages(null); sendBroadcast(Intent(STATE).setPackage(packageName)); super.onDestroy() }
+    override fun onDestroy() {
+        main.removeCallbacks(mediaChanged);runCatching{contentResolver.unregisterContentObserver(mediaObserver)}; FilesBridge.cancel(); active = null; closeBle(); if(receiverRegistered) unregisterReceiver(bluetoothReceiver); main.removeCallbacksAndMessages(null); sendBroadcast(Intent(STATE).setPackage(packageName)); super.onDestroy() }
     override fun onBind(intent: Intent?) = null
 }

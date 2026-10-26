@@ -19,8 +19,8 @@ import java.util.concurrent.TimeUnit
 
 /** MediaStore metadata only; originals are read only on explicit preview/export. */
 object GalleryMedia {
- data class Item(val id:Long,val path:String,val name:String,val album:String,val mime:String,val size:Long,val date:Long,val modified:Long,val width:Int,val height:Int,val duration:Long){
-  fun json(favorites:Set<String>)=JSONObject().put("id",id.toString()).put("path",path).put("name",name).put("album",album).put("mime",mime).put("size",size).put("date",date).put("modified",modified).put("width",width).put("height",height).put("duration",duration).put("favorite",path in favorites)
+ data class Item(val id:Long,val path:String,val name:String,val album:String,val mime:String,val size:Long,val date:Long,val modified:Long,val width:Int,val height:Int,val duration:Long,val generation:Long){
+  fun json(favorites:Set<String>)=JSONObject().put("id",id.toString()).put("path",path).put("name",name).put("album",album).put("mime",mime).put("size",size).put("date",date).put("modified",modified).put("width",width).put("height",height).put("duration",duration).put("favorite",path in favorites).put("generation",generation)
  }
  private var cached:List<Item>?=null
  private var cachedAt=0L
@@ -30,7 +30,7 @@ object GalleryMedia {
  @Synchronized private fun items(c:Context):List<Item>{
   if(cached!=null&&System.currentTimeMillis()-cachedAt<15000)return cached!!
   val fs=StorageBridge.engine(c);val root=Environment.getExternalStorageDirectory().canonicalFile
-  val columns=arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.Files.FileColumns.DATA,MediaStore.Files.FileColumns.DISPLAY_NAME,MediaStore.Files.FileColumns.MIME_TYPE,MediaStore.Files.FileColumns.SIZE,MediaStore.Files.FileColumns.DATE_MODIFIED,MediaStore.Images.ImageColumns.DATE_TAKEN,MediaStore.Images.ImageColumns.WIDTH,MediaStore.Images.ImageColumns.HEIGHT,MediaStore.Video.VideoColumns.DURATION)
+  val columns=arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.Files.FileColumns.DATA,MediaStore.Files.FileColumns.DISPLAY_NAME,MediaStore.Files.FileColumns.MIME_TYPE,MediaStore.Files.FileColumns.SIZE,MediaStore.Files.FileColumns.DATE_MODIFIED,MediaStore.Images.ImageColumns.DATE_TAKEN,MediaStore.Images.ImageColumns.WIDTH,MediaStore.Images.ImageColumns.HEIGHT,MediaStore.Video.VideoColumns.DURATION,MediaStore.MediaColumns.GENERATION_MODIFIED)
   val result=mutableListOf<Item>()
   c.contentResolver.query(MediaStore.Files.getContentUri("external"),columns,"media_type IN (?,?) AND is_pending=0 AND is_trashed=0",arrayOf("1","3"),"datetaken DESC, _id DESC")?.use{cursor->
    fun str(i:Int)=if(cursor.isNull(i))""else cursor.getString(i)
@@ -41,19 +41,23 @@ object GalleryMedia {
     if(path.split('/').any{it.startsWith('.')})continue
     if(runCatching{fs.resolve(path)}.isFailure)continue
     val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
-    result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),long(6).takeIf{it>0} ?: long(5)*1000,long(5)*1000,long(7).toInt(),long(8).toInt(),long(9)))
+    result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),long(6).takeIf{it>0} ?: long(5)*1000,long(5)*1000,long(7).toInt(),long(8).toInt(),long(9),long(10)))
    }
   }
   result.sortWith(compareByDescending<Item>{it.date}.thenByDescending{it.id});cached=result;cachedAt=System.currentTimeMillis();return result
  }
+ fun syncRows(c:Context):List<JSONObject>{invalidate();val favorite=favorites(c);return items(c).map{it.json(favorite)}}
  fun file(c:Context,path:String):File{val f=StorageBridge.engine(c).resolve(path);val mime=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "";if(!f.isFile||(!mime.startsWith("image/")&&!mime.startsWith("video/")))throw StorageFault("media","사진 또는 영상 파일이 아닙니다");return f}
  private fun remapFavorites(c:Context,mapping:Map<String,String>,copy:Boolean=false){val values=favorites(c).toMutableSet();mapping.forEach{(old,new)->if(old in values){if(!copy)values.remove(old);values.add(new)}};prefs(c).edit().putStringSet("favorites",values).commit()}
  fun rescan(c:Context,paths:List<String>){
   invalidate();val root=Environment.getExternalStorageDirectory();val valid=paths.distinct().take(20000).map{File(root,it).path};if(valid.isEmpty())return
+  prefs(c).edit().putString("syncChange",java.util.UUID.randomUUID().toString()).commit()
   val latch=CountDownLatch(valid.size);MediaScannerConnection.scanFile(c,valid.toTypedArray(),null){_,_->latch.countDown()};latch.await(20,TimeUnit.SECONDS);invalidate()
  }
  fun handle(c:Context,q:JSONObject,out:JSONObject){
   when(q.getString("op")){
+   "mediaSync"->GallerySync.sync(c,q,out)
+   "mediaTrashChecked"->GallerySync.trash(c,q,out)
    "mediaSession"->out.put("endpoint",GalleryServer.open(c as SyncService))
    "mediaClose"->GalleryServer.close()
    "mediaAlbums"->{

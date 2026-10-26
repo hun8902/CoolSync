@@ -63,6 +63,7 @@ enum KeyStore {
 
 final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var changed: ((String)->Void)?
+    var mediaChanged:(()->Void)?
     var phoneNotification: ((String,String,String,String,String,@escaping(String)->Void)->Void)?
     var fileMessage: ((Wire.Message)->Void)?
     var imageCopied:((URL,Int64)->Void)?
@@ -274,6 +275,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
         if m.type=="readyAck",!readyID.isEmpty,m.ref==readyID {readyID="";completeConnection();return}
         guard authenticated else { return }
+        if m.type=="mediaChanged" {mediaChanged?();return}
         if m.type=="phoneNotification" {
             guard let data=m.text.data(using:.utf8),let value=try?JSONSerialization.jsonObject(with:data) as? [String:String] else{return}
             let token=session

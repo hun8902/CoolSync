@@ -23,7 +23,7 @@ object GalleryServer {
   if(hosts.isEmpty()){close();throw StorageFault("wifi","휴대폰과 Mac을 같은 Wi-Fi에 연결하세요")}
   return JSONObject().put("hosts",JSONArray(hosts)).put("port",server!!.localPort).put("token",token)
  }
- private fun serve(service:SyncService,socket:Socket,expected:String){socket.use{try{
+ private fun serve(service:SyncService,socket:Socket,expected:String){val power=TransferPower.acquire(service);try{socket.use{try{
   val input=BufferedInputStream(it.getInputStream());val output=it.getOutputStream()
   fun line():String{val out=ByteArrayOutputStream();while(true){val b=input.read();if(b<0)throw EOFException();if(b==10)break;if(b!=13)out.write(b);require(out.size()<4096)};return out.toString("US-ASCII")}
   require(line().startsWith("POST /thumbnail "));var length=0;var headers=0
@@ -33,5 +33,5 @@ object GalleryServer {
   val clear=GalleryMedia.thumbnail(service,q.getString("path"));require(service.authenticated&&expected==token)
   val nonce=ByteArray(12).also{SecureRandom().nextBytes(it)};val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,SecretKeySpec(key,"AES"),GCMParameterSpec(128,nonce));cipher.updateAAD("CoolSync/media/1|${message.getString("id")}".toByteArray());val bytes=nonce+cipher.doFinal(clear)
   output.write("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray());output.write(bytes);output.flush()
- }catch(_:Exception){runCatching{it.getOutputStream().write("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())}}}}
+ }catch(_:Exception){runCatching{it.getOutputStream().write("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())}}}}finally{power.close()}}
 }

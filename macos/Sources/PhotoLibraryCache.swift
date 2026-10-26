@@ -1,0 +1,68 @@
+import Foundation
+import CryptoKit
+
+struct PhotoCatalog:Codable {
+    var revision=""
+    var items:[PhotoItem]=[]
+    var albums:[PhotoAlbum]=[]
+    var synced:Date?
+}
+struct PendingPhotoDelete:Codable,Identifiable {
+    var id=UUID().uuidString
+    var item:PhotoItem
+    var phoneDeleted=false
+    var error:String?
+}
+
+/// Private per-pair cache. Exported Finder copies are never tracked or removed.
+final class PhotoLibraryCache {
+    let folder:URL
+    private(set) var catalog=PhotoCatalog()
+    private(set) var pending:[PendingPhotoDelete]=[]
+    private let fm=FileManager.default
+    var protected=Set<URL>()
+    private var thumbnailWrites=0
+    var budget:Int64{Int64(UserDefaults.standard.integer(forKey:"photoCacheGB").clamped(to:1...10,default:2))*1024*1024*1024}
+    init(identity:Data){
+        let namespace=SHA256.hash(data:identity).map{String(format:"%02x",$0)}.joined()
+        folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/Photos/"+namespace,isDirectory:true)
+        for name in ["","thumbnails","originals","details"]{try? fm.createDirectory(at:folder.appendingPathComponent(name),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])}
+        var url=folder;var values=URLResourceValues();values.isExcludedFromBackup=true;try? url.setResourceValues(values)
+        if let data=try?Data(contentsOf:folder.appendingPathComponent("catalog.json")){catalog=(try?JSONDecoder().decode(PhotoCatalog.self,from:data)) ?? PhotoCatalog()}
+        if let data=try?Data(contentsOf:folder.appendingPathComponent("pending-deletes.json")){pending=(try?JSONDecoder().decode([PendingPhotoDelete].self,from:data)) ?? []}
+    }
+    private func save<T:Encodable>(_ value:T,_ name:String)throws{
+        let target=folder.appendingPathComponent(name);try JSONEncoder().encode(value).write(to:target,options:.atomic);try fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:target.path)
+    }
+    func commit(_ value:PhotoCatalog)throws{try save(value,"catalog.json");catalog=value}
+    func setPending(_ values:[PendingPhotoDelete])throws{try save(values,"pending-deletes.json");pending=values}
+    private func digest(_ item:PhotoItem)->String{SHA256.hash(data:Data("\(item.id)|\(item.path)|\(item.modified)|\(item.size)|\(item.generation ?? 0)".utf8)).map{String(format:"%02x",$0)}.joined()}
+    func thumbnailURL(_ item:PhotoItem)->URL{folder.appendingPathComponent("thumbnails/"+digest(item)+".jpg")}
+    func originalURL(_ item:PhotoItem)->URL{
+        let ext=URL(fileURLWithPath:item.name).pathExtension.filter{$0.isLetter||$0.isNumber}.prefix(12)
+        return folder.appendingPathComponent("originals/"+digest(item)+(ext.isEmpty ? "":"."+ext))
+    }
+    func original(_ item:PhotoItem,touch shouldTouch:Bool=true)->URL?{let url=originalURL(item);guard let size=(try?url.resourceValues(forKeys:[.fileSizeKey]).fileSize),Int64(size)==item.size else{return nil};if shouldTouch{touch(url)};return url}
+    func thumbnail(_ item:PhotoItem)->Data?{let url=thumbnailURL(item);guard let data=try?Data(contentsOf:url),data.count<=128000 else{return nil};touch(url);return data}
+    func putThumbnail(_ data:Data,_ item:PhotoItem){guard data.count<=128000 else{return};let url=thumbnailURL(item);try?data.write(to:url,options:.atomic);try?fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path);thumbnailWrites+=1;if thumbnailWrites%40==0{prune()}}
+    func details(_ item:PhotoItem)->[String:String]?{guard let data=try?Data(contentsOf:folder.appendingPathComponent("details/"+digest(item)+".json"))else{return nil};return try?JSONDecoder().decode([String:String].self,from:data)}
+    func putDetails(_ values:[String:String],_ item:PhotoItem){try?save(values,"details/"+digest(item)+".json")}
+    func touch(_ url:URL){try?fm.setAttributes([.modificationDate:Date()],ofItemAtPath:url.path)}
+    private var files:[URL]{["thumbnails","originals","details"].flatMap{(try?fm.contentsOfDirectory(at:folder.appendingPathComponent($0),includingPropertiesForKeys:[.fileSizeKey,.contentModificationDateKey])) ?? []}.filter{!$0.lastPathComponent.hasPrefix(".")}}
+    var bytes:Int64{files.reduce(0){$0+Int64((try?$1.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0)}}
+    func prune(excluding:Set<URL>=[]){
+        let rows=files.compactMap{url->(URL,Int64,Date)? in guard let v=try?url.resourceValues(forKeys:[.fileSizeKey,.contentModificationDateKey])else{return nil};return(url,Int64(v.fileSize ?? 0),v.contentModificationDate ?? .distantPast)}
+        var total=rows.reduce(Int64(0)){$0+$1.1}
+        for(url,size,_)in rows.sorted(by:{$0.2<$1.2}) where total>budget && !excluding.union(protected).contains(url){if (try?fm.removeItem(at:url)) != nil{total-=size}}
+    }
+    func discard(_ item:PhotoItem,trashOriginal:Bool)throws{
+        let original=originalURL(item)
+        if fm.fileExists(atPath:original.path){if trashOriginal{try fm.trashItem(at:original,resultingItemURL:nil)}else{try fm.removeItem(at:original)}}
+        let details=folder.appendingPathComponent("details/"+digest(item)+".json");if fm.fileExists(atPath:details.path){try fm.removeItem(at:details)}
+        let thumb=thumbnailURL(item);if fm.fileExists(atPath:thumb.path){try fm.removeItem(at:thumb)}
+    }
+    func clearFiles()throws{for url in files{try fm.removeItem(at:url)}}
+}
+private extension Int {
+    func clamped(to range:ClosedRange<Int>,default fallback:Int)->Int{self==0 ? fallback:Swift.min(range.upperBound,Swift.max(range.lowerBound,self))}
+}

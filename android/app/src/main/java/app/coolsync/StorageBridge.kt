@@ -14,6 +14,7 @@ object StorageBridge {
     private val worker=Executors.newSingleThreadExecutor()
     private val main=Handler(Looper.getMainLooper())
     fun engine(c:Context):StorageEngine {
+        if(!c.getSystemService(android.os.UserManager::class.java).isUserUnlocked) throw StorageFault("unlock","재부팅 후 휴대폰 잠금을 한 번 해제하세요")
         if(!Environment.isExternalStorageManager()) throw StorageFault("setup","휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용하세요")
         return StorageEngine(Environment.getExternalStorageDirectory(),File(c.filesDir,"trash-index"))
     }
@@ -21,6 +22,8 @@ object StorageBridge {
         val sessionKey=Protocol.key(service) ?: return
         val reference=message.optString("ref")
         worker.execute {
+            val power=TransferPower.acquire(service)
+            try {
             val response=JSONObject()
             try {
                 if(SyncService.active!==service || !service.authenticated || !sessionKey.contentEquals(Protocol.key(service) ?: byteArrayOf())) return@execute
@@ -47,9 +50,9 @@ object StorageBridge {
                     }
                     "mkdir" -> response.put("path",fs.create(path,q.getString("name"),true))
                     "touch" -> response.put("path",fs.create(path,q.getString("name"),false))
-                    "rename" -> response.put("path",fs.rename(path,q.getString("name")))
-                    "copy","move" -> fs.relocate(paths(q),q.getString("destination"),q.getString("op")=="copy")
-                    "trash" -> fs.discard(paths(q))
+                    "rename" -> {val old=mediaPaths(fs,listOf(path));val target=fs.rename(path,q.getString("name"));GalleryMedia.rescan(service,old+old.map{target+it.removePrefix(path)});response.put("path",target)}
+                    "copy","move" -> {val values=paths(q);val old=mediaPaths(fs,values);val target=q.getString("destination");fs.relocate(values,target,q.getString("op")=="copy");val destination=values.map{listOf(target,it.substringAfterLast('/')).filter{it.isNotEmpty()}.joinToString("/")};GalleryMedia.rescan(service,old+mediaPaths(fs,destination))}
+                    "trash" -> {val values=paths(q);val old=mediaPaths(fs,values);fs.discard(values);GalleryMedia.rescan(service,old)}
                     "listTrash" -> {
                         val items=fs.listTrash();val start=q.optInt("offset",0).coerceIn(0,items.size);val rows=JSONArray();var next=start
                         for(item in items.drop(start).take(50)){
@@ -73,7 +76,12 @@ object StorageBridge {
             catch(_:SecurityException) { response.put("ok",false).put("code","permission").put("error","이 항목을 관리할 권한이 없습니다") }
             catch(_:Exception) { response.put("ok",false).put("code","io").put("error","파일 작업을 완료하지 못했습니다. 경로와 권한을 확인하세요.") }
             main.post { if(SyncService.active===service && service.authenticated && sessionKey.contentEquals(Protocol.key(service) ?: byteArrayOf())) service.sendControl("fsResponse",response.toString(),reference) }
+            } finally {power.close()}
         }
+    }
+    private fun mediaPaths(fs:StorageEngine,paths:List<String>):List<String>{
+        val root=Environment.getExternalStorageDirectory()
+        return paths.flatMap{path->val file=fs.resolve(path);(if(file.isDirectory)file.walkTopDown().onEnter{!java.nio.file.Files.isSymbolicLink(it.toPath())}.filter{it.isFile}.take(20000).toList()else listOf(file))}.asSequence().filter{!java.nio.file.Files.isSymbolicLink(it.toPath())}.filter{val type=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(it.extension.lowercase()) ?: "";type.startsWith("image/")||type.startsWith("video/")}.map{it.relativeTo(root).invariantSeparatorsPath}.take(20000).toList()
     }
     private fun paths(q:JSONObject):List<String> {val array=q.getJSONArray("paths");return (0 until array.length()).map{array.getString(it)}}
     data class Upload(val temporary:File,val final:File)
