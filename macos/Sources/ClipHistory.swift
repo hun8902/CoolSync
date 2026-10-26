@@ -28,6 +28,6 @@ final class ClipHistory:ObservableObject {
     func favorite(_ id:String){if let i=entries.firstIndex(where:{$0.id==id}){entries[i].favorite.toggle();save()}}
     func remove(_ id:String){if let e=entries.first(where:{$0.id==id}),let image=e.image{try? FileManager.default.removeItem(at:folder.appendingPathComponent(image))};entries.removeAll{$0.id==id};save()}
     func clear(){for e in Array(entries){remove(e.id)}}
-    func copy(_ e:ClipEntry){let p=NSPasteboard.general;p.clearContents();if let text=e.text{p.setString(text,forType:.string)}else if let name=e.image,let data=try? Data(contentsOf:folder.appendingPathComponent(name)){p.setData(data,forType:.png)}}
+    func copy(_ e:ClipEntry){let p=NSPasteboard.general;p.clearContents();if let text=e.text{p.setString(text,forType:.string)}else if let name=e.image,let data=try? Data(contentsOf:folder.appendingPathComponent(name)){p.setData(data,forType:.png);if let tiff=NSImage(data:data)?.tiffRepresentation{p.setData(tiff,forType:.tiff)}}}
     static func png(_ image:NSImage)throws->Data{guard let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),bitmap.pixelsWide>0,bitmap.pixelsWide*bitmap.pixelsHigh<=16000000,let bytes=bitmap.representation(using:.png,properties:[:]),bytes.count<=20*1024*1024 else{throw CocoaError(.fileReadTooLarge)};return bytes}
 }

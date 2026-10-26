@@ -23,4 +23,5 @@ model.explorer.status="4개 항목";model.explorer.available=128000000000
 save("mac-files")
 model.tab=2;save("mac-settings")
 model.history.add(text:"회의 일정은 오후 3시입니다.",source:"Mac");model.history.add(text:"https://github.com/hun8902/CoolSync",source:"휴대폰");model.history.favorite(model.history.entries[0].id);model.clipboardState.selection=model.history.entries[0].id;model.tab=3;save("mac-clipboard")
+app.appearance=NSAppearance(named:.darkAqua);host.rootView=CoolDashboard(model:model).environment(\.controlActiveState,.active).environment(\.colorScheme,.dark);save("mac-clipboard-dark")
 print("Native SwiftUI screenshots saved (preview data, no Bluetooth or keychain access)")

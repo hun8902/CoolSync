@@ -287,7 +287,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     func applyImage(_ url:URL,time:Int64){
         checkClipboard()
         guard canApplyImage(time),let image=NSImage(contentsOf:url),let data=try? ClipHistory.png(image)else{status("이미지를 적용하지 못했거나 더 최신 복사가 있습니다");return}
-        let p=NSPasteboard.general;p.clearContents();guard p.setData(data,forType:.png)else{return};lastChange=p.changeCount;versionTime=time;versionID="image";pending=nil;ackTask?.cancel();ClipHistory.shared.add(image:url,source:"휴대폰");lastSync=Date();status("휴대폰에서 이미지 복사됨")
+        let p=NSPasteboard.general;p.clearContents();guard p.setData(data,forType:.png)else{return};if let tiff=image.tiffRepresentation{p.setData(tiff,forType:.tiff)};lastChange=p.changeCount;versionTime=time;versionID="image";pending=nil;ackTask?.cancel();ClipHistory.shared.add(image:url,source:"휴대폰");lastSync=Date();status("휴대폰에서 이미지 복사됨")
     }
     private func awaitAck(_ message: Wire.Message,retry: Bool) {
         let token = session

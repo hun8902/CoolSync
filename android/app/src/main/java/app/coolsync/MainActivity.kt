@@ -202,7 +202,7 @@ class MainActivity:Activity() {
                     fun action(title:String,run:()->Unit){actions.addView(label(title,13f,blue,true).apply{gravity=Gravity.CENTER;minHeight=dp(42);background=shape(0x0c007aff,12);interactive(this,run)},LinearLayout.LayoutParams(0,dp(42),1f).apply{rightMargin=dp(6)})}
                     action("다시 복사"){ClipHistory.copy(this,item);toast("클립보드에 복사했습니다")};action(if(item.optBoolean("favorite"))"★ 해제"else"☆ 즐겨찾기"){ClipHistory.favorite(this,item.getString("id"));render()};action("삭제"){ClipHistory.remove(this,item.getString("id"));render()};entry.addView(actions);list.addView(entry)
                 }
-                if(items.isNotEmpty())button(body,"모든 기록 삭제",false){val(d,b)=sheet("기록을 모두 삭제할까요?");b.addView(label("이 기기에 저장한 즐겨찾기와 이미지도 삭제합니다. 상대 기기의 기록에는 영향을 주지 않습니다.",14f,secondary));space(b,18);button(b,"모두 삭제"){ClipHistory.clear(this);d.dismiss();render()};button(b,"취소",false){d.dismiss()}}
+                if(items.isNotEmpty())button(body,"모든 기록 삭제",false){val(d,b)=sheet("기록을 모두 삭제할까요?");b.addView(label("이 기기의 기록과 즐겨찾기를 삭제합니다. 현재 시스템 클립보드와 상대 기기의 기록은 유지됩니다.",14f,secondary));space(b,18);button(b,"모두 삭제"){ClipHistory.clear(this);d.dismiss();render()};button(b,"취소",false){d.dismiss()}}
                 body.addView(label("기록은 이 기기에만 저장합니다. 민감한 클립보드 표시는 존중하며, 휴대폰 잠금 중에는 공유하지 않습니다.",12f,secondary))
             }
 

@@ -55,6 +55,7 @@ final class DashboardModel: ObservableObject {
 struct CoolDashboard:View {
     @ObservedObject var model:DashboardModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
     var body:some View{
         HStack(spacing:0){
             VStack(alignment:.leading,spacing:8){
@@ -76,7 +77,7 @@ struct CoolDashboard:View {
             }.padding(18).frame(width:168).frame(maxHeight:.infinity).background(.ultraThinMaterial)
             Divider()
             Group{if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
-        }.background(LinearGradient(colors:[Color(red:0.94,green:0.96,blue:1),Color(red:0.98,green:0.96,blue:0.99)],startPoint:.topLeading,endPoint:.bottomTrailing)).animation(reduceMotion ? nil:.easeInOut(duration:0.2),value:model.tab).frame(minWidth:800,minHeight:520)
+        }.background(LinearGradient(colors:scheme == .dark ? [Color(red:0.08,green:0.10,blue:0.15),Color(red:0.13,green:0.09,blue:0.15)]:[Color(red:0.94,green:0.96,blue:1),Color(red:0.98,green:0.96,blue:0.99)],startPoint:.topLeading,endPoint:.bottomTrailing)).animation(reduceMotion ? nil:.easeInOut(duration:0.2),value:model.tab).frame(minWidth:800,minHeight:520)
         .alert("연결 확인",isPresented:$model.showConnectionIssue){Button("다시 연결"){model.engine?.reconnect()};Button("닫기",role:.cancel){}}message:{Text((model.connectionIssue.isEmpty ? model.status:model.connectionIssue)+"\n\n휴대폰에서 CoolSync의 연결을 시작하고 주변 기기 권한을 허용하세요. 두 기기의 Bluetooth를 켜고, 인증이 실패하면 현재 QR을 다시 스캔하세요.")}
     }
     private func location(_ title:String,_ icon:String,_ path:String)->some View{Button{model.tab=1;model.explorer.browse(path)}label:{Label(title,systemImage:icon).frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,7).padding(.horizontal,6).background(model.tab==1 && !model.explorer.trashMode && model.explorer.path==path ? Color.blue.opacity(0.12):.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)}
@@ -139,7 +140,7 @@ struct ClipboardPane:View {
                 }.padding(24).frame(maxWidth:.infinity,maxHeight:.infinity).background(.thinMaterial)
             }
             Divider();HStack{Text("\(filtered.count)개 · 이 기기에만 저장");Spacer();Text("민감한 클립보드는 기록하지 않습니다")}.font(.system(size:11)).foregroundStyle(.secondary).padding(12)
-        }.alert("기록을 모두 삭제할까요?",isPresented:$state.confirmClear){Button("모두 삭제",role:.destructive){history.clear()};Button("취소",role:.cancel){}}message:{Text("이 Mac에 저장된 즐겨찾기와 이미지도 삭제합니다. 휴대폰의 기록에는 영향을 주지 않습니다.")}
+        }.alert("기록을 모두 삭제할까요?",isPresented:$state.confirmClear){Button("모두 삭제",role:.destructive){history.clear()};Button("취소",role:.cancel){}}message:{Text("이 Mac의 기록과 즐겨찾기를 삭제합니다. 현재 시스템 클립보드와 휴대폰의 기록은 유지됩니다.")}
     }
 }
 struct ExplorerPane:View{
