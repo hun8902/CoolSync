@@ -15,7 +15,10 @@ struct PhotosPane:View {
     var body:some View{
         HStack(spacing:0){
             if photos.sidebarShown{sidebar.frame(width:215).background(.ultraThinMaterial);Divider()}
-            VStack(spacing:0){toolbar;Divider();HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1:0).allowsHitTesting(photos.preview==nil).accessibilityHidden(photos.preview != nil);if photos.items.isEmpty && !photos.loading && photos.preview==nil{VStack(spacing:12){Image(systemName:"photo.on.rectangle").font(.system(size:35,weight:.light)).foregroundStyle(.tertiary);Text(photos.connected?()==true ? "사진이나 영상이 없습니다":"휴대폰을 연결하세요").foregroundStyle(.secondary);Button("새로 고침"){photos.reload()}}};if let item=photos.preview{viewer(item)}};if photos.infoShown{Divider();inspector.frame(width:275)}};Divider();footer}
+            VStack(spacing:0){toolbar;Divider();
+                if photos.dateWorkActive{HStack{ProgressView(value:photos.dateWorkProgress).frame(width:140);Text(photos.status).font(.caption);Spacer();Button("중단"){photos.stopDateWork()}}.padding(10)}
+                if !photos.dateWorkActive && !photos.dateWorkFailures.isEmpty{HStack{Text("수정일 정리 실패 \(photos.dateWorkFailures.count)개");Menu("실패 내역"){ForEach(photos.dateWorkFailures,id:\.self){Text($0)}};Button("실패 항목 재시도…"){photos.retryDateWork()}}.font(.caption).padding(8)}
+HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1:0).allowsHitTesting(photos.preview==nil).accessibilityHidden(photos.preview != nil);if photos.items.isEmpty && !photos.loading && photos.preview==nil{VStack(spacing:12){Image(systemName:"photo.on.rectangle").font(.system(size:35,weight:.light)).foregroundStyle(.tertiary);Text(photos.connected?()==true ? "사진이나 영상이 없습니다":"휴대폰을 연결하세요").foregroundStyle(.secondary);Button("새로 고침"){photos.reload()}}};if let item=photos.preview{viewer(item)}};if photos.infoShown{Divider();inspector.frame(width:275)}};Divider();footer}
         }.background(Color(nsColor:.textBackgroundColor)).onDrop(of:[UTType.fileURL.identifier,photoPathType.rawValue],isTargeted:nil){drop($0,to:photos.album.isEmpty ? "Pictures/CoolSync":photos.album)}.animation(reduceMotion ? nil:.easeInOut(duration:0.18),value:photos.sidebarShown)
         .onAppear{photos.appear()}.onDisappear{photos.disappear()}
         .sheet(isPresented:$photos.showPendingDeletes){PendingPhotoDeletesPane(photos:photos)}
@@ -75,7 +78,12 @@ struct PhotosPane:View {
         Group{
             if photos.scope=="recent"{Text("최근 항목은 추가일 기준")}else{Picker("날짜 기준",selection:$photos.sortKey){Text("촬영일 · 없으면 추가일").tag("captured");Text("추가일").tag("added")}}
             Picker("정렬 방향",selection:$photos.ascending){Text("최신순").tag(false);Text("오래된순").tag(true)}
-            Divider();Button("EXIF 촬영일로 파일 수정일 맞추기…"){photos.alignModifiedDates()}.disabled(photos.selection.isEmpty)
+            Divider();Menu("EXIF 촬영일로 파일 수정일 맞추기"){
+                Button("선택한 사진…"){photos.alignModifiedDates()}.disabled(photos.selection.isEmpty)
+                Button("현재 앨범 전체…"){photos.alignModifiedDates("album")}.disabled(photos.album.isEmpty)
+                Button("사진 보관함 전체…"){photos.alignModifiedDates("all")}
+                Button("실패·중단 항목 재시도…"){photos.retryDateWork()}
+            }.disabled(photos.loading || photos.caching || photos.moving)
         }
     }
     private var range:String{let valid=photos.items.filter{photos.orderTime($0)>0};guard let first=valid.first,let last=valid.last else{return photos.loading ? "불러오는 중…":"날짜 없음"};let dates=[photos.orderDate(first),photos.orderDate(last)].sorted();return dates[0].formatted(date:.numeric,time:.omitted)+" – "+dates[1].formatted(date:.numeric,time:.omitted)}

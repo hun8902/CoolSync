@@ -118,6 +118,16 @@ final class PhotosModel:ObservableObject {
     @Published var previewPhase="원본을 가져오는 중…"
     @Published var originalProgress:Double=0
     @Published var dateAlignmentResult:String?
+    @Published var dateWorkActive=false
+    @Published var dateWorkProgress:Double=0
+    @Published var dateWorkFailures:[String]=[]
+    private var dateWorkStopped=false
+    private var dateWorkTotal=0
+    private var dateWorkRemaining:[PhotoItem]=[]
+    private var dateWorkToken=UUID()
+    private var dateRetry:[PhotoItem]=[]
+    func stopDateWork(){dateWorkStopped=true;status="현재 묶음 처리 후 중단합니다"}
+    func retryDateWork(){let paths=Set(dateRetry.map{$0.path});alignModifiedDates("retry",retryPaths:paths)}
     private var transferObservation:AnyCancellable?
     var title:String{if !album.isEmpty{return albums.first{$0.path==album}?.name ?? album};return ["all":"보관함","videos":"비디오","favorites":"즐겨찾기","recent":"최근 저장된 항목","screenshots":"스크린샷"][scope] ?? "보관함"}
     var filtered:[PhotoItem]{items.filter{search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)}}
@@ -133,6 +143,7 @@ final class PhotosModel:ObservableObject {
         return result
     }
     func configure(identity:Data){
+        dateRetry=[];dateWorkRemaining=[];dateWorkToken=UUID();dateWorkFailures=[];dateWorkActive=false;dateWorkStopped=true
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();originals.cancelAll();thumbnails.close();thumbnails.clear();closePreview()
         disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true }
         originals.thumbnails=thumbnails;originals.cacheTarget={ [weak self] item in self?.disk?.originalURL(item) };originals.key={ [weak self] in self?.thumbnails.key?() ?? Data() };originals.progress={ [weak self] owner,value in guard let self else{return};self.originalProgress=value;if owner=="preview"{self.previewPhase="원본을 가져오는 중 · \(Int(value*100))%"}}
@@ -207,25 +218,32 @@ final class PhotosModel:ObservableObject {
     }
     private func applyInfo(_ values:[String:String]){info=values;latitude=values["latitude"].flatMap(Double.init);longitude=values["longitude"].flatMap(Double.init);if let a=latitude,let b=longitude{region.center=CLLocationCoordinate2D(latitude:a,longitude:b)}}
     func toggleInfo(){infoShown.toggle();if infoShown{loadInfo()}}
-    func alignModifiedDates(){
-        let values=selected;guard !values.isEmpty else{return}
+    func alignModifiedDates(_ target:String="selected",retryPaths:Set<String>=[]){
+        let catalog=disk?.catalog.items ?? []
+        let source: [PhotoItem]
+        switch target{case "all":source=catalog;case "album":source=catalog.filter{$0.album==album};case "retry":source=catalog.filter{retryPaths.contains($0.path)};default:source=selected}
+        let values=source.filter{$0.mime.hasPrefix("image/")};guard !values.isEmpty else{error="대상 사진이 없습니다";return}
         guard connected?()==true,!caching,!moving,!loading else{error="휴대폰 연결 후 진행 중인 사진 작업을 마치세요";return}
-        let alert=NSAlert();alert.messageText="선택한 사진의 파일 수정일을 EXIF 촬영일로 맞출까요?";alert.informativeText="선택한 \(values.count)개 항목에서 EXIF 촬영일이 있는 사진만 변경합니다. 휴대폰 파일의 수정일을 바꾸며 원본 내용과 EXIF는 유지합니다. 이전 수정일은 휴대폰 앱에 기록합니다.";alert.addButton(withTitle:"수정일 맞추기");alert.addButton(withTitle:"취소")
-        if alert.runModal() == .alertFirstButtonReturn{closePreview();loading=true;alignDateBatch(values,updated:0,skipped:0,failed:0)}
+        let alert=NSAlert();alert.messageText="대상 사진 \(values.count)개의 파일 수정일을 맞출까요?";alert.informativeText="선택한 \(values.count)개 항목에서 EXIF 촬영일이 있는 사진만 변경합니다. 휴대폰 파일의 수정일을 바꾸며 원본 내용과 EXIF는 유지합니다. 이전 수정일은 휴대폰 앱에 기록합니다.";alert.addButton(withTitle:"수정일 맞추기");alert.addButton(withTitle:"취소")
+        if alert.runModal() == .alertFirstButtonReturn{closePreview();loading=true;dateWorkActive=true;dateWorkToken=UUID();dateWorkStopped=false;dateWorkTotal=values.count;dateWorkProgress=0;dateWorkFailures=[];dateRetry=[];alignDateBatch(values,updated:0,skipped:0,failed:0)}
     }
     private func alignDateBatch(_ values:[PhotoItem],updated:Int,skipped:Int,failed:Int){
-        guard let disk else{loading=false;return}
-        guard !values.isEmpty else{loading=false;dateAlignmentResult="변경 \(updated)개 · 건너뜀 \(skipped)개 · 실패 \(failed)개\nEXIF 촬영일이 없거나 이미 같은 수정일인 항목은 건너뜁니다.";reload();return}
+        guard let disk else{loading=false;dateWorkActive=false;return}
+        dateWorkRemaining=values
+        dateWorkProgress=Double(dateWorkTotal-values.count)/Double(max(1,dateWorkTotal))
+        if dateWorkStopped{loading=false;dateWorkActive=false;status="수정일 정리 중단 · \(values.count)개 미처리";dateRetry.append(contentsOf:values);return}
+        guard !values.isEmpty else{loading=false;dateWorkActive=false;dateAlignmentResult="변경 \(updated)개 · 건너뜀 \(skipped)개 · 실패 \(failed)개\nEXIF 촬영일이 없거나 이미 같은 수정일인 항목은 건너뜁니다.";reload();return}
         var selected:[PhotoItem]=[];var rows:[[String:Any]]=[]
         for item in values.prefix(20){let row:[String:Any]=["id":item.id,"path":item.path,"size":item.size,"modified":item.modified,"generation":item.generation ?? 0];if let data=try?JSONSerialization.data(withJSONObject:rows+[row]),data.count<=16000{selected.append(item);rows.append(row)}else{break}}
         guard !selected.isEmpty else{loading=false;error="선택한 파일 경로가 너무 깁니다";return}
         status="EXIF 촬영일로 수정일 정리 중 · \(values.count)개 남음"
+        let workToken=dateWorkToken
         rpc?.callPhoto("mediaAlignDates",["items":rows]){[weak self]r in
-            guard let self,self.disk===disk else{return}
-            guard r["ok"]as?Bool==true,let results=r["results"]as?[[String:Any]]else{self.loading=false;self.error=r["error"]as?String ?? "파일 수정일을 정리하지 못했습니다";return}
+            guard let self,self.disk===disk,self.dateWorkToken==workToken else{return}
+            guard r["ok"]as?Bool==true,let results=r["results"]as?[[String:Any]]else{self.loading=false;self.dateWorkActive=false;self.dateRetry.append(contentsOf:values);self.error=r["error"]as?String ?? "파일 수정일을 정리하지 못했습니다. 다시 시도할 수 있습니다";return}
             var changed=0,ignored=0,errors=0;var catalog=disk.catalog
             for result in results{
-                if result["status"]as?String=="updated"{changed+=1}else if result["status"]as?String=="failed"{errors+=1}else{ignored+=1}
+                if result["status"]as?String=="updated"{changed+=1}else if result["status"]as?String=="failed"{errors+=1;if let path=result["path"]as?String,let item=selected.first(where:{$0.path==path}){self.dateRetry.append(item);self.dateWorkFailures.append("\(item.name): \(result["error"]as?String ?? "처리 실패")")}}else{ignored+=1}
                 if let path=result["path"]as?String,let old=selected.first(where:{$0.path==path}),let value=result["item"],let data=try?JSONSerialization.data(withJSONObject:value),let item=try?JSONDecoder().decode(PhotoItem.self,from:data){do{try disk.rekey(old,item);if let index=catalog.items.firstIndex(where:{$0.path==path}){catalog.items[index]=item}}catch{errors+=1}}
             }
             do{try disk.commit(catalog)}catch{self.loading=false;self.error="휴대폰 날짜는 처리됐지만 Mac 캐시 기록을 갱신하지 못했습니다";return}
@@ -406,6 +424,6 @@ final class PhotosModel:ObservableObject {
     }
     func canNavigatePreview(_ delta:Int)->Bool{guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path})else{return false};return filtered.indices.contains(i+delta)}
     func nextPreview(_ delta:Int){guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path}),filtered.indices.contains(i+delta)else{return};open(filtered[i+delta])}
-    func connectionEnded(){pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
+    func connectionEnded(){if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
     func imported(){changed()}
 }

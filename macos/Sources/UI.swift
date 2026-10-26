@@ -255,7 +255,7 @@ struct ExplorerPane:View{
     @ObservedObject var files:FileTransfer
     var body:some View{
         VStack(spacing:0){
-            ViewThatFits(in:.horizontal){HStack(spacing:14){
+            if !model.trashMode{ViewThatFits(in:.horizontal){HStack(spacing:14){
                 Button{model.back()}label:{Image(systemName:"chevron.left")}.help("뒤로")
                 Button{model.up()}label:{Image(systemName:"arrow.up")}.help("상위 폴더")
                 Button{model.reload()}label:{Image(systemName:"arrow.clockwise")}.help("새로 고침")
@@ -269,7 +269,7 @@ struct ExplorerPane:View{
                 Menu("Mac으로"){Button("복사…"){model.download()};Button("이동…"){model.download(move:true)}}.disabled(model.selection.isEmpty)
                 Button("Mac에서 가져오기…"){model.chooseUpload()}.disabled(model.trashMode || model.busy)
                 TextField("이름으로 검색",text:$model.search).textFieldStyle(.roundedBorder).frame(width:160)
-            };compactToolbar}.buttonStyle(.borderless).padding(.horizontal,16).padding(.vertical,15).background(.ultraThinMaterial)
+            };compactToolbar}.buttonStyle(.borderless).padding(.horizontal,16).padding(.vertical,15).background(.ultraThinMaterial)}
             Divider()
             HStack(spacing:6){Button("내부 저장소"){model.browse("")}.buttonStyle(.borderless)
                 if model.trashMode{Image(systemName:"chevron.right").font(.system(size:9));Text("휴지통")}else{ForEach(Array(model.path.split(separator:"/").enumerated()),id:\.offset){i,part in Image(systemName:"chevron.right").font(.system(size:9)).foregroundStyle(.tertiary);Button(String(part)){model.browse(model.path.split(separator:"/").prefix(i+1).joined(separator:"/"))}.buttonStyle(.borderless)}}
@@ -277,7 +277,7 @@ struct ExplorerPane:View{
             }.font(.system(size:12)).padding(.horizontal,16).padding(.vertical,9)
             Divider()
             if model.trashMode{
-                List(model.trash){item in HStack{Image(systemName:"doc");VStack(alignment:.leading){Text(item.name);Text(item.original).font(.system(size:11)).foregroundStyle(.secondary)};Spacer();Button("복원"){model.restore(item.id)};Button("영구 삭제"){model.permanent(item.id)}}}.listStyle(.inset)
+                TrashPane(model:model)
             }else{
                 ZStack{
                     RemoteTable(model:model)

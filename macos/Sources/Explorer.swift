@@ -18,6 +18,36 @@ private enum ExplorerJob{case upload(URL,String);case download(String,URL);case 
 final class ExplorerModel:ObservableObject {
     @Published var entries:[RemoteEntry]=[]
     @Published var trash:[RemoteTrash]=[]
+    @Published var trashSelection=Set<String>()
+    @Published var trashWorking=false
+    @Published var trashProgress:Double=0
+    @Published var trashFailures:[String]=[]
+    private var trashStop=false
+    private var trashRetry:[RemoteTrash]=[]
+    private var trashAction="deletePermanent"
+    var visibleTrash:[RemoteTrash]{trash.filter{search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.original.localizedCaseInsensitiveContains(search)}}
+    func stopTrashWork(){trashStop=true;status="현재 항목 처리 후 중단합니다"}
+    func retryTrashWork(){runTrash(trashRetry,action:trashAction)}
+    func runTrash(_ values:[RemoteTrash],action:String){
+        guard !values.isEmpty,!busy,connected?()==true else{return}
+        let alert=NSAlert();alert.messageText=action=="restore" ? "\(values.count)개 항목을 복원할까요?":"\(values.count)개 항목을 영구 삭제할까요?"
+        alert.informativeText=action=="restore" ? "원래 위치로 복원합니다. 이름이 충돌하는 항목은 실패 내역에 표시됩니다.":"휴대폰 CoolSync 휴지통에서 원본을 삭제합니다. 복원할 수 없습니다."
+        alert.addButton(withTitle:action=="restore" ? "복원":"영구 삭제");alert.addButton(withTitle:"취소")
+        guard alert.runModal() == .alertFirstButtonReturn else{return}
+        trashAction=action;trashRetry=[];trashFailures=[];trashStop=false;trashWorking=true;busy=true;trashProgress=0
+        trashStep(values,total:values.count,action:action)
+    }
+    private func trashStep(_ remaining:[RemoteTrash],total:Int,action:String){
+        trashProgress=Double(total-remaining.count)/Double(max(1,total))
+        if remaining.isEmpty || trashStop{trashRetry.append(contentsOf:remaining);trashWorking=false;busy=false;status="처리 \(total-remaining.count)/\(total)개 · 실패 \(trashFailures.count)개";return}
+        let item=remaining[0];status="\(action=="restore" ? "복원":"영구 삭제") 중 · \(total-remaining.count+1)/\(total) · \(item.name)"
+        call(action,["id":item.id],quiet:true){[weak self]r in
+            guard let self,self.trashWorking else{return}
+            if r["ok"]as?Bool==true{self.trash.removeAll{$0.id==item.id};self.trashSelection.remove(item.id);self.onFilesystemChange?()}
+            else{self.trashRetry.append(item);self.trashFailures.append("\(item.name): \(r["error"]as?String ?? "실패")")}
+            self.trashStep(Array(remaining.dropFirst()),total:total,action:action)
+        }
+    }
     @Published var path=""
     @Published var trashMode=false
     @Published var selection=Set<String>()
@@ -97,7 +127,7 @@ final class ExplorerModel:ObservableObject {
             guard let self,self.trashMode else{return}
             guard r["ok"]as?Bool==true,let rows=r["trash"],let d=try?JSONSerialization.data(withJSONObject:rows),let items=try?JSONDecoder().decode([RemoteTrash].self,from:d)else{self.busy=false;return}
             let all=collected+items;let next=r["next"]as?Int ?? all.count,total=r["total"]as?Int ?? all.count
-            if next<total && next>offset{self.loadTrash(offset:next,collected:all)}else{self.trash=all;self.busy=false;self.status="\(all.count)개 항목"}
+            if next<total && next>offset{self.loadTrash(offset:next,collected:all)}else{self.trash=all;self.trashSelection.formIntersection(Set(all.map{$0.id}));self.busy=false;self.status="\(all.count)개 항목"}
         }
     }
     func newItem(directory:Bool){
@@ -111,8 +141,8 @@ final class ExplorerModel:ObservableObject {
         guard !selection.isEmpty else{return};let alert=NSAlert();alert.messageText="\(selection.count)개 항목을 휴지통으로 이동할까요?";alert.informativeText="휴대폰의 CoolSync 휴지통에서 복원할 수 있습니다.";alert.addButton(withTitle:"휴지통으로 이동");alert.addButton(withTitle:"취소")
         if alert.runModal() == .alertFirstButtonReturn{mutate("trash",["paths":Array(selection)])}
     }
-    func restore(_ id:String){mutate("restore",["id":id])}
-    func permanent(_ id:String){let alert=NSAlert();alert.messageText="이 항목을 영구 삭제할까요?";alert.informativeText="휴지통에서 삭제하면 복원할 수 없습니다.";alert.addButton(withTitle:"영구 삭제");alert.addButton(withTitle:"취소");if alert.runModal() == .alertFirstButtonReturn{mutate("deletePermanent",["id":id])}}
+    func restore(_ id:String){runTrash(trash.filter{$0.id==id},action:"restore")}
+    func permanent(_ id:String){runTrash(trash.filter{$0.id==id},action:"deletePermanent")}
     private func mutate(_ op:String,_ fields:[String:Any]){busy=true;call(op,fields){[weak self]r in guard let self else{return};self.busy=false;if r["ok"]as?Bool==true{self.selection=[];self.reload()}}}
     private func prompt(_ title:String,value:String,completion:@escaping(String)->Void){let alert=NSAlert();alert.messageText=title;let input=NSTextField(string:value);input.frame=NSRect(x:0,y:0,width:300,height:26);alert.accessoryView=input;alert.addButton(withTitle:"확인");alert.addButton(withTitle:"취소");alert.window.initialFirstResponder=input;if alert.runModal() == .alertFirstButtonReturn{completion(input.stringValue)}}
     func chooseUpload(){let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=true;panel.allowsMultipleSelection=true;if panel.runModal() == .OK{upload(panel.urls,to:path)}}
@@ -180,6 +210,7 @@ final class ExplorerModel:ObservableObject {
         }
     }
     func connectionEnded(){
+        trashStop=true;trashWorking=false;trashSelection=[];trashRetry=[];trashFailures=[];trash=[]
         jobDeadline?.cancel();for timer in timers.values{timer.cancel()};timers=[:];callbacks=[:];quietCalls=[]
         jobs=[];queueActive=false;files?.expectedDownloads=[:];files?.onCompletion=nil;files?.cancel(notify:false)
         let completion=promisedCompletion;promisedCompletion=nil;completion?(CocoaError(.userCancelled))
