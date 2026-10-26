@@ -22,7 +22,7 @@ object GallerySync {
   val version=volumes.joinToString("|"){it+":"+MediaStore.getVersion(c,it)}
   val generation=volumes.joinToString("|"){it+":"+MediaStore.getGeneration(c,it)}
   val prefs=c.getSharedPreferences("gallery",0)
-  val stamp=hash(JSONObject().put("version",version).put("generation",generation).put("local",prefs.getString("syncChange","")).put("favorites",JSONArray((prefs.getStringSet("favorites",emptySet()) ?: emptySet()).sorted())).put("albums",JSONArray((prefs.getStringSet("albums",emptySet()) ?: emptySet()).sorted())).toString())
+  val stamp=hash(JSONObject().put("schema",2).put("version",version).put("generation",generation).put("local",prefs.getString("syncChange","")).put("favorites",JSONArray((prefs.getStringSet("favorites",emptySet()) ?: emptySet()).sorted())).put("albums",JSONArray((prefs.getStringSet("albums",emptySet()) ?: emptySet()).sorted())).toString())
   val last=read(File(dir,"latest.json"))
   if(last?.optString("stamp")==stamp){val token=last.optString("revision");if(token.matches(Regex("[a-f0-9]{64}")))read(File(dir,"$token.json"))?.let{return token to it}}
   val rows=JSONArray(GalleryMedia.syncRows(c).sortedBy{it.getString("id")})

@@ -19,8 +19,8 @@ import java.util.concurrent.TimeUnit
 
 /** MediaStore metadata only; originals are read only on explicit preview/export. */
 object GalleryMedia {
- data class Item(val id:Long,val path:String,val name:String,val album:String,val mime:String,val size:Long,val date:Long,val modified:Long,val width:Int,val height:Int,val duration:Long,val generation:Long){
-  fun json(favorites:Set<String>)=JSONObject().put("id",id.toString()).put("path",path).put("name",name).put("album",album).put("mime",mime).put("size",size).put("date",date).put("modified",modified).put("width",width).put("height",height).put("duration",duration).put("favorite",path in favorites).put("generation",generation)
+ data class Item(val id:Long,val path:String,val name:String,val album:String,val mime:String,val size:Long,val date:Long,val modified:Long,val width:Int,val height:Int,val duration:Long,val generation:Long,val added:Long,val dateSource:String){
+  fun json(favorites:Set<String>)=JSONObject().put("id",id.toString()).put("path",path).put("name",name).put("album",album).put("mime",mime).put("size",size).put("date",date).put("modified",modified).put("width",width).put("height",height).put("duration",duration).put("favorite",path in favorites).put("generation",generation).put("added",added).put("dateSource",dateSource)
  }
  private var cached:List<Item>?=null
  private var cachedAt=0L
@@ -30,7 +30,7 @@ object GalleryMedia {
  @Synchronized private fun items(c:Context):List<Item>{
   if(cached!=null&&System.currentTimeMillis()-cachedAt<15000)return cached!!
   val fs=StorageBridge.engine(c);val root=Environment.getExternalStorageDirectory().canonicalFile
-  val columns=arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.Files.FileColumns.DATA,MediaStore.Files.FileColumns.DISPLAY_NAME,MediaStore.Files.FileColumns.MIME_TYPE,MediaStore.Files.FileColumns.SIZE,MediaStore.Files.FileColumns.DATE_MODIFIED,MediaStore.Images.ImageColumns.DATE_TAKEN,MediaStore.Images.ImageColumns.WIDTH,MediaStore.Images.ImageColumns.HEIGHT,MediaStore.Video.VideoColumns.DURATION,MediaStore.MediaColumns.GENERATION_MODIFIED)
+  val columns=arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.Files.FileColumns.DATA,MediaStore.Files.FileColumns.DISPLAY_NAME,MediaStore.Files.FileColumns.MIME_TYPE,MediaStore.Files.FileColumns.SIZE,MediaStore.Files.FileColumns.DATE_MODIFIED,MediaStore.Images.ImageColumns.DATE_TAKEN,MediaStore.Images.ImageColumns.WIDTH,MediaStore.Images.ImageColumns.HEIGHT,MediaStore.Video.VideoColumns.DURATION,MediaStore.MediaColumns.GENERATION_MODIFIED,MediaStore.MediaColumns.DATE_ADDED)
   val result=mutableListOf<Item>()
   c.contentResolver.query(MediaStore.Files.getContentUri("external"),columns,"media_type IN (?,?) AND is_pending=0 AND is_trashed=0",arrayOf("1","3"),"datetaken DESC, _id DESC")?.use{cursor->
    fun str(i:Int)=if(cursor.isNull(i))""else cursor.getString(i)
@@ -41,7 +41,11 @@ object GalleryMedia {
     if(path.split('/').any{it.startsWith('.')})continue
     if(runCatching{fs.resolve(path)}.isFailure)continue
     val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
-    result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),long(6).takeIf{it>0} ?: long(5)*1000,long(5)*1000,long(7).toInt(),long(8).toInt(),long(9),long(10)))
+    val taken=long(6)
+    val added=long(11)*1000;val modified=long(5)*1000
+    val date=when{taken>0->taken;added>0->added;else->modified}
+    val source=when{taken>0->"captured";added>0->"added";modified>0->"modified";else->"unknown"}
+    result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),date,modified,long(7).toInt(),long(8).toInt(),long(9),long(10),added,source))
    }
   }
   result.sortWith(compareByDescending<Item>{it.date}.thenByDescending{it.id});cached=result;cachedAt=System.currentTimeMillis();return result

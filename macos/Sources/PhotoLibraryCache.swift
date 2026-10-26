@@ -26,7 +26,7 @@ final class PhotoLibraryCache {
     init(identity:Data){
         let namespace=SHA256.hash(data:identity).map{String(format:"%02x",$0)}.joined()
         folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/Photos/"+namespace,isDirectory:true)
-        for name in ["","thumbnails","originals","details"]{try? fm.createDirectory(at:folder.appendingPathComponent(name),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])}
+        for name in ["","thumbnails","originals","details","motion"]{try? fm.createDirectory(at:folder.appendingPathComponent(name),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])}
         var url=folder;var values=URLResourceValues();values.isExcludedFromBackup=true;try? url.setResourceValues(values)
         if let data=try?Data(contentsOf:folder.appendingPathComponent("catalog.json")){catalog=(try?JSONDecoder().decode(PhotoCatalog.self,from:data)) ?? PhotoCatalog()}
         if let data=try?Data(contentsOf:folder.appendingPathComponent("pending-deletes.json")){pending=(try?JSONDecoder().decode([PendingPhotoDelete].self,from:data)) ?? []}
@@ -42,22 +42,24 @@ final class PhotoLibraryCache {
         let ext=URL(fileURLWithPath:item.name).pathExtension.filter{$0.isLetter||$0.isNumber}.prefix(12)
         return folder.appendingPathComponent("originals/"+digest(item)+(ext.isEmpty ? "":"."+ext))
     }
+    func motionURL(_ item:PhotoItem)->URL{folder.appendingPathComponent("motion/"+digest(item)+".mp4")}
     func original(_ item:PhotoItem,touch shouldTouch:Bool=true)->URL?{let url=originalURL(item);guard let size=(try?url.resourceValues(forKeys:[.fileSizeKey]).fileSize),Int64(size)==item.size else{return nil};if shouldTouch{touch(url)};return url}
     func thumbnail(_ item:PhotoItem)->Data?{let url=thumbnailURL(item);guard let data=try?Data(contentsOf:url),data.count<=128000 else{return nil};touch(url);return data}
     func putThumbnail(_ data:Data,_ item:PhotoItem){guard data.count<=128000 else{return};let url=thumbnailURL(item);try?data.write(to:url,options:.atomic);try?fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path);thumbnailWrites+=1;if thumbnailWrites%40==0{prune()}}
     func details(_ item:PhotoItem)->[String:String]?{guard let data=try?Data(contentsOf:folder.appendingPathComponent("details/"+digest(item)+".json"))else{return nil};return try?JSONDecoder().decode([String:String].self,from:data)}
     func putDetails(_ values:[String:String],_ item:PhotoItem){try?save(values,"details/"+digest(item)+".json")}
     func touch(_ url:URL){try?fm.setAttributes([.modificationDate:Date()],ofItemAtPath:url.path)}
-    private var files:[URL]{["thumbnails","originals","details"].flatMap{(try?fm.contentsOfDirectory(at:folder.appendingPathComponent($0),includingPropertiesForKeys:[.fileSizeKey,.contentModificationDateKey])) ?? []}.filter{!$0.lastPathComponent.hasPrefix(".")}}
+    private var files:[URL]{["thumbnails","originals","details","motion"].flatMap{(try?fm.contentsOfDirectory(at:folder.appendingPathComponent($0),includingPropertiesForKeys:[.fileSizeKey,.contentModificationDateKey])) ?? []}.filter{!$0.lastPathComponent.hasPrefix(".")}}
     var bytes:Int64{files.reduce(0){$0+Int64((try?$1.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0)}}
     func prune(excluding:Set<URL>=[]){
         let rows=files.compactMap{url->(URL,Int64,Date)? in guard let v=try?url.resourceValues(forKeys:[.fileSizeKey,.contentModificationDateKey])else{return nil};return(url,Int64(v.fileSize ?? 0),v.contentModificationDate ?? .distantPast)}
         var total=rows.reduce(Int64(0)){$0+$1.1}
-        for(url,size,_)in rows.sorted(by:{$0.2<$1.2}) where total>budget && !excluding.union(protected).contains(url){if (try?fm.removeItem(at:url)) != nil{total-=size}}
+        for(url,size,_)in rows.sorted(by:{a,b in let am=a.0.deletingLastPathComponent().lastPathComponent=="motion",bm=b.0.deletingLastPathComponent().lastPathComponent=="motion";return am != bm ? am:a.2<b.2}) where total>budget && !excluding.union(protected).contains(url){if (try?fm.removeItem(at:url)) != nil{total-=size}}
     }
     func discard(_ item:PhotoItem,trashOriginal:Bool)throws{
         let original=originalURL(item)
         if fm.fileExists(atPath:original.path){if trashOriginal{try fm.trashItem(at:original,resultingItemURL:nil)}else{try fm.removeItem(at:original)}}
+        let motion=motionURL(item);if fm.fileExists(atPath:motion.path){try fm.removeItem(at:motion)}
         let details=folder.appendingPathComponent("details/"+digest(item)+".json");if fm.fileExists(atPath:details.path){try fm.removeItem(at:details)}
         let thumb=thumbnailURL(item);if fm.fileExists(atPath:thumb.path){try fm.removeItem(at:thumb)}
     }

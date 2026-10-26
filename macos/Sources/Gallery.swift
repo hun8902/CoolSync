@@ -7,7 +7,7 @@ import MapKit
 import UniformTypeIdentifiers
 
 struct PhotoItem:Codable,Identifiable,Equatable {
-    let id:String;let path:String;let name:String;let album:String;let mime:String;let size:Int64;let date:Int64;let modified:Int64;let width:Int;let height:Int;let duration:Int64;var favorite:Bool;let generation:Int64?
+    let id:String;let path:String;let name:String;let album:String;let mime:String;let size:Int64;let date:Int64;let modified:Int64;let width:Int;let height:Int;let duration:Int64;var favorite:Bool;let generation:Int64?;let added:Int64?;let dateSource:String?
     var cacheIdentity:String{"\(id)|\(path)|\(modified)|\(size)|\(generation ?? 0)"}
     var video:Bool{mime.hasPrefix("video/")}
     var timestamp:Date{Date(timeIntervalSince1970:Double(date)/1000)}
@@ -81,6 +81,16 @@ final class PhotosModel:ObservableObject {
     @Published var preview:PhotoItem?
     @Published var previewImage:NSImage?
     @Published var player:AVPlayer?
+    @Published var motionAvailable=false
+    @Published var motionLoading=false
+    @Published var motionPlaying=false
+    @Published var motionError=""
+    private var motionURL:URL?
+    private var previewGeneration=UUID()
+    private var motionExtraction:Task<URL?,Error>?
+    private var motionEndObserver:NSObjectProtocol?
+    @Published var sortKey=UserDefaults.standard.string(forKey:"photoSortKey") ?? "captured"{didSet{UserDefaults.standard.set(sortKey,forKey:"photoSortKey");applyView()}}
+    @Published var ascending=UserDefaults.standard.bool(forKey:"photoSortAscending"){didSet{UserDefaults.standard.set(ascending,forKey:"photoSortAscending");applyView()}}
     @Published var previewLoading=false
     @Published var previewError=""
     @Published var moving=false
@@ -105,7 +115,16 @@ final class PhotosModel:ObservableObject {
     var title:String{if !album.isEmpty{return albums.first{$0.path==album}?.name ?? album};return ["all":"보관함","videos":"비디오","favorites":"즐겨찾기","recent":"최근 저장된 항목","screenshots":"스크린샷"][scope] ?? "보관함"}
     var filtered:[PhotoItem]{items.filter{search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)}}
     var selected:[PhotoItem]{items.filter{selection.contains($0.path)}}
-    var sections:[PhotoSection]{let rows=filtered;guard grouping != "all"else{return[PhotoSection(title:"",items:rows)]};let formatter=DateFormatter();formatter.dateFormat=grouping=="year" ? "yyyy년":"yyyy년 M월";var result:[PhotoSection]=[];for item in rows{let title=formatter.string(from:item.timestamp);if result.last?.title==title{let old=result.removeLast();result.append(PhotoSection(title:title,items:old.items+[item]))}else{result.append(PhotoSection(title:title,items:[item]))}};return result}
+    func orderTime(_ item:PhotoItem)->Int64{scope=="recent" || sortKey=="added" ? (item.added.flatMap{$0>0 ? $0:nil} ?? item.modified):item.date}
+    func orderDate(_ item:PhotoItem)->Date{Date(timeIntervalSince1970:Double(orderTime(item))/1000)}
+    func dateSourceTitle(_ item:PhotoItem)->String{["captured":"촬영일","added":"추가일 · 촬영일 없음","modified":"수정일 · 촬영일 없음","unknown":"날짜 없음"][item.dateSource ?? ""] ?? "기존 목록 날짜"}
+    var sections:[PhotoSection]{
+        let rows=filtered;guard grouping != "all"else{return[PhotoSection(title:"",items:rows)]}
+        let formatter=DateFormatter();formatter.dateFormat=grouping=="year" ? "yyyy년":"yyyy년 M월"
+        var result:[PhotoSection]=[]
+        for item in rows{let title=orderTime(item)>0 ? formatter.string(from:orderDate(item)):"날짜 없음";if result.last?.title==title{let old=result.removeLast();result.append(PhotoSection(title:title,items:old.items+[item]))}else{result.append(PhotoSection(title:title,items:[item]))}}
+        return result
+    }
     func configure(identity:Data){
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();thumbnails.close();thumbnails.clear();closePreview()
         disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;pendingDeletes=disk?.pending ?? [];loading=false;caching=false;deletingIDs=[]
@@ -117,7 +136,14 @@ final class PhotosModel:ObservableObject {
     private func applyView(){
         let pending=Set(pendingDeletes.map{$0.item.cacheIdentity})
         var rows=(disk?.catalog.items ?? []).filter{!pending.contains($0.cacheIdentity) && (album.isEmpty || $0.album==album) && (scope != "videos" || $0.video) && (scope != "favorites" || $0.favorite) && (scope != "screenshots" || $0.album.localizedCaseInsensitiveContains("screenshot"))}
-        rows.sort{scope=="recent" ? ($0.modified==$1.modified ? $0.id>$1.id:$0.modified>$1.modified):($0.date==$1.date ? $0.id>$1.id:$0.date>$1.date)}
+        rows.sort{a,b in
+            let left=orderTime(a),right=orderTime(b)
+            if (left>0) != (right>0){return left>0}
+            if left != right{return ascending ? left<right:left>right}
+            if let x=Int64(a.id),let y=Int64(b.id),x != y{return ascending ? x<y:x>y}
+            return a.path.localizedStandardCompare(b.path) == .orderedAscending
+        }
+        if let preview,!rows.contains(where:{$0.cacheIdentity==preview.cacheIdentity}){closePreview()}
         items=rows;albums=disk?.catalog.albums ?? [];total=rows.count;selection.formIntersection(Set(rows.map{$0.path}));revision+=1
         status=connected?()==true ? "\(rows.filter{!$0.video}.count)장의 사진, \(rows.filter{$0.video}.count)개의 비디오":"Mac에 저장된 목록 · 오프라인"
         if !pendingDeletes.isEmpty{status += " · 삭제 대기 \(pendingDeletes.count)개"}
@@ -270,15 +296,59 @@ final class PhotosModel:ObservableObject {
         if a.runModal() == .alertFirstButtonReturn{do{closePreview();try disk?.clearFiles();thumbnails.clear();revision+=1;refreshCacheUsage()}catch{self.error=error.localizedDescription}}
     }
     func open(_ item:PhotoItem){
+        if previewLoading && preview != nil{closePreview()}
         guard files?.hasTransfer != true else{error="진행 중인 파일 전송을 마친 뒤 열어주세요";return};closePreview();preview=item;selection=[item.path];previewLoading=true;previewError="";if infoShown{loadInfo()}
         guard let disk else{previewLoading=false;previewError="사진 캐시를 열지 못했습니다";return}
         if let target=disk.original(item){disk.protected=[target];show(item,url:target);return}
         guard connected?()==true else{previewLoading=false;previewError="이 원본은 Mac에 보관되지 않았습니다. 휴대폰 연결 후 열거나 ‘선택 원본 보관’을 사용하세요.";return}
         let target=disk.originalURL(item);disk.protected=[target]
-        rpc?.promise(item.remote,to:target){[weak self]error in guard let self,self.preview?.path==item.path,self.disk===disk else{return};if let error{self.previewLoading=false;self.previewError=error.localizedDescription}else{disk.touch(target);disk.prune(excluding:[target]);self.refreshCacheUsage();self.show(item,url:target)}}
+        let generation=previewGeneration
+        rpc?.promise(item.remote,to:target){[weak self]error in guard let self,self.previewGeneration==generation,self.preview?.path==item.path,self.disk===disk else{return};if let error{self.previewLoading=false;self.previewError=error.localizedDescription}else{disk.touch(target);disk.prune(excluding:[target]);self.refreshCacheUsage();self.show(item,url:target)}}
     }
-    private func show(_ item:PhotoItem,url:URL){previewLoading=false;if item.video{let asset=AVURLAsset(url:url);Task{let playable=(try?await asset.load(.isPlayable)) ?? false;await MainActor.run{guard self.preview?.path==item.path else{return};if playable{self.player=AVPlayer(url:url);self.player?.play()}else{self.previewError="이 Mac에서 재생할 수 없는 영상 형식입니다. Mac으로 저장한 뒤 다른 플레이어로 열어보세요."}}}}else{previewImage=NSImage(contentsOf:url);if previewImage==nil{previewError="이 Mac에서 표시할 수 없는 이미지입니다"}}}
-    func closePreview(){if previewLoading&&preview != nil{rpc?.cancelJobs()};player?.pause();player=nil;preview=nil;previewImage=nil;previewLoading=false;previewError="";disk?.protected=[];disk?.prune()}
+    private func show(_ item:PhotoItem,url:URL){
+        previewLoading=false;let generation=previewGeneration
+        if item.video{
+            let asset=AVURLAsset(url:url)
+            Task{ @MainActor [weak self] in let playable=(try?await asset.load(.isPlayable)) ?? false;guard let self,self.previewGeneration==generation else{return};if playable{self.player=AVPlayer(url:url);self.player?.play()}else{self.previewError="이 Mac에서 재생할 수 없는 영상 형식입니다. Mac으로 저장한 뒤 다른 플레이어로 열어보세요."}}
+            return
+        }
+        previewImage=NSImage(contentsOf:url)
+        if previewImage==nil{previewError="이 Mac에서 표시할 수 없는 이미지입니다";return}
+        guard let disk else{return};motionLoading=true
+        let target=disk.motionURL(item)
+        let extraction=Task.detached(priority:.utility){try MotionPhotoReader.extract(from:url,to:target)};motionExtraction=extraction
+        Task{ @MainActor [weak self] in
+            let result:URL?;let failure:String?
+            do{result=try await extraction.value;failure=nil}catch is CancellationError{return}catch{result=nil;failure="모션 포토 영상을 읽지 못했습니다."}
+            let playable:Bool
+            if let result{playable=(try?await AVURLAsset(url:result).load(.isPlayable)) ?? false}else{playable=false}
+            guard let self,self.previewGeneration==generation,self.disk===disk else{if !disk.catalog.items.contains(where:{$0.cacheIdentity==item.cacheIdentity}){try?disk.discard(item,trashOriginal:false)};disk.prune();return}
+            self.motionLoading=false;self.motionExtraction=nil
+            if let result,playable{self.motionURL=result;self.motionAvailable=true;disk.touch(result);disk.protected.formUnion([url,result]);disk.prune();self.revision+=1}
+            else if result != nil{self.motionError="이 Mac에서 모션 포토 영상 형식을 재생할 수 없습니다."}
+            else{self.motionError=failure ?? ""}
+            self.refreshCacheUsage()
+        }
+    }
+
+    func hasMotion(_ item:PhotoItem)->Bool{guard let disk else{return false};return FileManager.default.fileExists(atPath:disk.motionURL(item).path)}
+    func togglePlayback(){
+        if preview?.video==true{if player?.timeControlStatus == .playing{player?.pause()}else{player?.play()};return}
+        guard motionAvailable,let url=motionURL else{return}
+        if motionPlaying{player?.pause();player=nil;motionPlaying=false;return}
+        let next=AVPlayer(url:url);player=next;motionPlaying=true
+        if let motionEndObserver{NotificationCenter.default.removeObserver(motionEndObserver)}
+        let generation=previewGeneration
+        motionEndObserver=NotificationCenter.default.addObserver(forName:.AVPlayerItemDidPlayToEndTime,object:next.currentItem,queue:.main){[weak self]_ in guard let self,self.previewGeneration==generation else{return};self.player=nil;self.motionPlaying=false}
+        next.play()
+    }
+    func closePreview(){
+        previewGeneration=UUID();motionExtraction?.cancel();motionExtraction=nil
+        if let motionEndObserver{NotificationCenter.default.removeObserver(motionEndObserver)};motionEndObserver=nil
+        if previewLoading&&preview != nil{rpc?.cancelJobs()}
+        player?.pause();player=nil;preview=nil;previewImage=nil;previewLoading=false;previewError="";motionURL=nil;motionAvailable=false;motionLoading=false;motionPlaying=false;motionError="";disk?.protected=[];disk?.prune()
+    }
+    func canNavigatePreview(_ delta:Int)->Bool{guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path})else{return false};return filtered.indices.contains(i+delta)}
     func nextPreview(_ delta:Int){guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path}),filtered.indices.contains(i+delta)else{return};open(filtered[i+delta])}
     func connectionEnded(){pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
     func imported(){changed()}
