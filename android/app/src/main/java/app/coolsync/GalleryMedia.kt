@@ -1,0 +1,98 @@
+package app.coolsync
+
+import android.Manifest
+import android.content.*
+import android.content.pm.PackageManager
+import android.graphics.*
+import android.media.MediaMetadataRetriever
+import android.media.MediaScannerConnection
+import android.provider.MediaStore
+import android.net.Uri
+import android.os.Environment
+import android.util.Size
+import android.util.Base64
+import androidx.exifinterface.media.ExifInterface
+import org.json.*
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+/** MediaStore metadata only; originals are read only on explicit preview/export. */
+object GalleryMedia {
+ data class Item(val id:Long,val path:String,val name:String,val album:String,val mime:String,val size:Long,val date:Long,val modified:Long,val width:Int,val height:Int,val duration:Long){
+  fun json(favorites:Set<String>)=JSONObject().put("id",id.toString()).put("path",path).put("name",name).put("album",album).put("mime",mime).put("size",size).put("date",date).put("modified",modified).put("width",width).put("height",height).put("duration",duration).put("favorite",path in favorites)
+ }
+ private var cached:List<Item>?=null
+ private var cachedAt=0L
+ private fun prefs(c:Context)=c.getSharedPreferences("gallery",0)
+ private fun favorites(c:Context)=prefs(c).getStringSet("favorites",emptySet()) ?: emptySet()
+ @Synchronized fun invalidate(){cached=null}
+ @Synchronized private fun items(c:Context):List<Item>{
+  if(cached!=null&&System.currentTimeMillis()-cachedAt<15000)return cached!!
+  val fs=StorageBridge.engine(c);val root=Environment.getExternalStorageDirectory().canonicalFile
+  val columns=arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.Files.FileColumns.DATA,MediaStore.Files.FileColumns.DISPLAY_NAME,MediaStore.Files.FileColumns.MIME_TYPE,MediaStore.Files.FileColumns.SIZE,MediaStore.Files.FileColumns.DATE_MODIFIED,MediaStore.Images.ImageColumns.DATE_TAKEN,MediaStore.Images.ImageColumns.WIDTH,MediaStore.Images.ImageColumns.HEIGHT,MediaStore.Video.VideoColumns.DURATION)
+  val result=mutableListOf<Item>()
+  c.contentResolver.query(MediaStore.Files.getContentUri("external"),columns,"media_type IN (?,?) AND is_pending=0 AND is_trashed=0",arrayOf("1","3"),"datetaken DESC, _id DESC")?.use{cursor->
+   fun str(i:Int)=if(cursor.isNull(i))""else cursor.getString(i)
+   fun long(i:Int)=if(cursor.isNull(i))0L else cursor.getLong(i)
+   while(cursor.moveToNext()){
+    val file=File(str(1));if(!file.exists()||!file.path.startsWith(root.path+"/"))continue
+    val path=file.relativeTo(root).invariantSeparatorsPath
+    if(path.split('/').any{it.startsWith('.')})continue
+    if(runCatching{fs.resolve(path)}.isFailure)continue
+    val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
+    result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),long(6).takeIf{it>0} ?: long(5)*1000,long(5)*1000,long(7).toInt(),long(8).toInt(),long(9)))
+   }
+  }
+  result.sortWith(compareByDescending<Item>{it.date}.thenByDescending{it.id});cached=result;cachedAt=System.currentTimeMillis();return result
+ }
+ fun file(c:Context,path:String):File{val f=StorageBridge.engine(c).resolve(path);val mime=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "";if(!f.isFile||(!mime.startsWith("image/")&&!mime.startsWith("video/")))throw StorageFault("media","사진 또는 영상 파일이 아닙니다");return f}
+ fun rescan(c:Context,paths:List<String>){
+  invalidate();val root=Environment.getExternalStorageDirectory();val valid=paths.distinct().take(20000).map{File(root,it).path};if(valid.isEmpty())return
+  val latch=CountDownLatch(valid.size);MediaScannerConnection.scanFile(c,valid.toTypedArray(),null){_,_->latch.countDown()};latch.await(20,TimeUnit.SECONDS);invalidate()
+ }
+ fun handle(c:Context,q:JSONObject,out:JSONObject){
+  when(q.getString("op")){
+   "mediaSession"->out.put("endpoint",GalleryServer.open(c as SyncService))
+   "mediaClose"->GalleryServer.close()
+   "mediaAlbums"->{
+    if(q.optBoolean("refresh"))invalidate()
+    val grouped=items(c).groupBy{it.album};val paths=(grouped.keys+(prefs(c).getStringSet("albums",emptySet()) ?: emptySet())).filter{it.isNotEmpty()&&runCatching{StorageBridge.engine(c).resolve(it).isDirectory}.getOrDefault(false)}.sorted()
+    out.put("albums",JSONArray(paths.map{path->val list=grouped[path] ?: emptyList();JSONObject().put("path",path).put("name",path.substringAfterLast('/')).put("count",list.size).put("videos",list.count{it.mime.startsWith("video/")})})).put("count",items(c).size)
+   }
+   "mediaList"->{
+    val favorite=favorites(c);val album=q.optString("album");val scope=q.optString("scope","all");val search=q.optString("search").lowercase()
+    val rows=items(c).filter{(album.isEmpty()||it.album==album)&&(search.isEmpty()||it.name.lowercase().contains(search))&&when(scope){"videos"->it.mime.startsWith("video/");"favorites"->it.path in favorite;"screenshots"->it.album.contains("screenshot",true);else->true}}
+    val ordered=if(scope=="recent")rows.sortedByDescending{it.modified}else rows
+    val start=q.optInt("offset").coerceIn(0,ordered.size);val page=ordered.drop(start).take(40)
+    out.put("items",JSONArray(page.map{it.json(favorite)})).put("next",start+page.size).put("total",ordered.size)
+   }
+   "mediaInfo"->{
+    val path=q.getString("path");val f=file(c,path);val info=JSONObject().put("name",f.name).put("size",f.length()).put("locationAllowed",c.checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION)==PackageManager.PERMISSION_GRANTED)
+    val item=items(c).firstOrNull{it.path==path};if(item!=null)info.put("mime",item.mime).put("date",item.date).put("width",item.width).put("height",item.height).put("duration",item.duration)
+    if(item?.mime?.startsWith("video/")==true){
+     val retriever=MediaMetadataRetriever();try{retriever.setDataSource(f.path);info.put("duration",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0);info.put("width",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0);info.put("height",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0);info.put("rotation",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));info.put("codec",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE));if(info.optBoolean("locationAllowed")){val loc=retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION);val match=Regex("([+-][0-9.]+)([+-][0-9.]+)").find(loc ?: "");match?.let{info.put("latitude",it.groupValues[1].toDouble()).put("longitude",it.groupValues[2].toDouble())}}}finally{retriever.release()}
+    }else runCatching{
+     val exif=ExifInterface(f.path)
+     for((key,tag)in listOf("make" to ExifInterface.TAG_MAKE,"camera" to ExifInterface.TAG_MODEL,"lens" to ExifInterface.TAG_LENS_MODEL,"iso" to ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,"exposure" to ExifInterface.TAG_EXPOSURE_TIME,"aperture" to ExifInterface.TAG_F_NUMBER,"focalLength" to ExifInterface.TAG_FOCAL_LENGTH,"captured" to ExifInterface.TAG_DATETIME_ORIGINAL,"orientation" to ExifInterface.TAG_ORIENTATION))exif.getAttribute(tag)?.let{info.put(key,it)}
+     if(info.optBoolean("locationAllowed"))exif.latLong?.let{info.put("latitude",it[0]).put("longitude",it[1])}
+    }
+    out.put("info",info)
+   }
+   "mediaFavorite"->{val set=favorites(c).toMutableSet();val paths=paths(q);for(p in paths){file(c,p);if(q.optBoolean("value"))set.add(p)else set.remove(p)};prefs(c).edit().putStringSet("favorites",set).commit()}
+   "mediaAlbumCreate"->{val fs=StorageBridge.engine(c);if(!File(Environment.getExternalStorageDirectory(),"Pictures").exists())fs.create("","Pictures",true);val name=q.getString("name");val candidate="Pictures/$name";val path=if(q.optBoolean("reuse")&&runCatching{fs.resolve(candidate).isDirectory}.getOrDefault(false))candidate else fs.create("Pictures",name,true);val albums=(prefs(c).getStringSet("albums",emptySet()) ?: emptySet()).toMutableSet();albums.add(path);prefs(c).edit().putStringSet("albums",albums).commit();out.put("path",path);invalidate()}
+   "mediaAlbumRename"->{val fs=StorageBridge.engine(c);val path=q.getString("path");require(path.isNotEmpty());val old=items(c).filter{it.path.startsWith(path+"/")}.map{it.path};val target=fs.rename(path,q.getString("name"));val albums=(prefs(c).getStringSet("albums",emptySet()) ?: emptySet()).toMutableSet();albums.remove(path);albums.add(target);prefs(c).edit().putStringSet("albums",albums).commit();rescan(c,old+old.map{target+it.removePrefix(path)});out.put("path",target)}
+   "mediaMove","mediaCopy"->{val fs=StorageBridge.engine(c);val paths=paths(q);paths.forEach{file(c,it)};val target=q.getString("destination");fs.relocate(paths,target,q.getString("op")=="mediaCopy");rescan(c,paths+paths.map{target+"/"+it.substringAfterLast('/')})}
+   "mediaTrash"->{val values=paths(q);values.forEach{file(c,it)};StorageBridge.engine(c).discard(values);rescan(c,values)}
+   "mediaAlbumTrash"->{val path=q.getString("path");require(path.isNotEmpty());val old=items(c).filter{it.path.startsWith(path+"/")}.map{it.path};StorageBridge.engine(c).discard(listOf(path));val albums=(prefs(c).getStringSet("albums",emptySet()) ?: emptySet()).toMutableSet();albums.remove(path);prefs(c).edit().putStringSet("albums",albums).commit();rescan(c,old)}
+   else->throw StorageFault("operation","지원하지 않는 사진 작업입니다")
+  }
+ }
+ private fun paths(q:JSONObject):List<String>{val array=q.getJSONArray("paths");if(array.length()>500)throw StorageFault("size","한 번에 500개 이하를 선택하세요");return(0 until array.length()).map{array.getString(it)}}
+ fun thumbnail(c:Context,path:String):ByteArray{
+  val f=file(c,path);val item=items(c).firstOrNull{it.path==path};val uri=item?.let{ContentUris.withAppendedId(if(it.mime.startsWith("video/"))MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI,it.id)}
+  val bitmap=if(uri!=null)runCatching{c.contentResolver.loadThumbnail(uri,Size(240,240),null)}.getOrNull()else null
+  val source=bitmap ?: if(item?.mime?.startsWith("video/")==true)android.media.ThumbnailUtils.createVideoThumbnail(f,Size(240,240),null)else android.media.ThumbnailUtils.createImageThumbnail(f,Size(240,240),null)
+  try{val bytes=java.io.ByteArrayOutputStream();source.compress(Bitmap.CompressFormat.JPEG,75,bytes);require(bytes.size()<=128000);return bytes.toByteArray()}finally{source.recycle()}
+ }
+}

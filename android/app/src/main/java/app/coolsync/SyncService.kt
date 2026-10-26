@@ -22,7 +22,7 @@ class SyncService : Service() {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var peer: BluetoothDevice? = null
     private var subscribed = false
-    var authenticated = false; private set
+    @Volatile var authenticated = false; private set
     private var mtu = 23
     var status = "시작 중"; private set
     var peerName = "Mac"; private set
@@ -229,6 +229,7 @@ class SyncService : Service() {
         else main.postDelayed(sendTimeout,8000)
     }
     private fun resetPeer() {
+        GalleryServer.close()
         peer = null; authenticated = false; subscribed = false; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null
         main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout)

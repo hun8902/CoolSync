@@ -51,3 +51,7 @@ Mac 앱은 개인용 ad-hoc 서명이며 Apple 공증은 받지 않았다. Andro
 - Android clipboard capture remains event driven; no clipboard polling, WakeLock or ADB requirement was introduced.
 - The translucent surfaces are platform-adapted visuals. Android does not use Apple's native Liquid Glass framework; compositor blur falls back to translucency when unavailable.
 - Physical Galaxy-to-Mac image synchronization and paste into KakaoTalk or other third-party apps have not been verified. Source URI access and destination app image-paste support are required. Image clipboard payloads require the local-network transfer path.
+
+## Photo gallery implementation
+
+Added album/media RPCs, on-demand encrypted Wi-Fi thumbnails, a macOS Photos-style grid and inspector, local original-file preview/video playback, multi-selection and bidirectional drag/export. User requested build and deployment only; no new runtime, device, screenshot or scenario tests were performed for this gallery revision. Android and macOS compiler results and GitHub release state are reported separately.

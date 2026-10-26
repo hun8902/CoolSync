@@ -22,7 +22,7 @@ import javax.crypto.spec.SecretKeySpec
 
 /** Wi-Fi is used only for explicit file transfers. No polling, discovery, cloud, or wake lock. */
 object FilesBridge {
-    const val LIMIT = 268435456L
+    const val LIMIT = 8589934592L
     var offer: JSONObject? = null; private set
     var selected: Uri? = null; private set
     var destination: Uri? = null; private set
@@ -64,7 +64,7 @@ object FilesBridge {
                 val digest=MessageDigest.getInstance("SHA-256"); var size=0L
                 c.contentResolver.openInputStream(source)!!.use { input ->
                     val buffer=ByteArray(65536)
-                    while(true) { if(epoch!=generation) return@execute; val n=input.read(buffer); if(n<0) break; size+=n; require(size<=LIMIT) { "파일은 256 MB 이하만 보낼 수 있습니다" }; digest.update(buffer,0,n) }
+                    while(true) { if(epoch!=generation) return@execute; val n=input.read(buffer); if(n<0) break; size+=n; require(size<=LIMIT) { "파일은 8 GB 이하만 보낼 수 있습니다" }; digest.update(buffer,0,n) }
                 }
                 val meta=JSONObject().put("id",UUID.randomUUID().toString()).put("name",name).put("size",size).put("sha",digest.digest().joinToString("") { "%02x".format(it) }).put("flow","upload")
                 if(clipboardImage)meta.put("clipboard",true).put("clipTime",copiedAt)
@@ -150,7 +150,7 @@ object FilesBridge {
                     }
                     require(hash.digest().joinToString("") { "%02x".format(it) }==meta.getString("sha")) { "파일 무결성 확인에 실패했습니다" }
                     if(meta.optBoolean("clipboard")){require(ClipHistory.receive(c,java.io.File(target!!.path!!),meta.optLong("clipTime"))){"새 복사 내용이 있어 이전 이미지를 적용하지 않았습니다"}}
-                    if(managed!=null) { require(!managed.final.exists() && managed.temporary.renameTo(managed.final)) { "파일을 저장하지 못했습니다" } }
+                    if(managed!=null) { require(!managed.final.exists() && managed.temporary.renameTo(managed.final)) { "파일을 저장하지 못했습니다" };GalleryMedia.rescan(c,listOf(managed.final.relativeTo(android.os.Environment.getExternalStorageDirectory()).invariantSeparatorsPath)) }
                     writeFrame(output,Protocol.seal(key,Protocol.message("fileDone",ref=id)).dropLast(1).toByteArray())
                 }
                 success=true

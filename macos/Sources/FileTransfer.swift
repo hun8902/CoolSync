@@ -29,7 +29,7 @@ private final class TransferSession {
 }
 
 final class FileTransfer: ObservableObject {
-    static let limit: Int64=268435456
+    static let limit: Int64=8589934592
     @Published var summary="보낼 파일을 선택하세요"
     @Published var progress: Double=0
     @Published var busy=false
@@ -64,7 +64,7 @@ final class FileTransfer: ObservableObject {
         busy=true; summary="파일 확인 중"; let task=TransferSession(); session=task
         worker.async { [weak self] in
             do {
-                let info=try url.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey]); guard info.isRegularFile==true, let size=info.fileSize, size<=Self.limit else { throw self?.failure("일반 파일 256 MB 이하만 보낼 수 있습니다") ?? CocoaError(.fileReadUnknown) }
+                let info=try url.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey]); guard info.isRegularFile==true, let size=info.fileSize, size<=Self.limit else { throw self?.failure("일반 파일 8 GB 이하만 보낼 수 있습니다") ?? CocoaError(.fileReadUnknown) }
                 let hash=try Self.hash(url,session:task)
                 var m=FileMeta(id:UUID().uuidString,name:url.lastPathComponent,size:Int64(size),sha:hash,flow:"download")
                 m.path=folder;m.clipboard=clipboard ? true:nil;m.clipTime=clipTime

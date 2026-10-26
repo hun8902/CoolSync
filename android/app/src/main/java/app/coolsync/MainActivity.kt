@@ -83,6 +83,7 @@ class MainActivity:Activity() {
         if(Build.VERSION.SDK_INT>=33 && !notifications())missing+=Manifest.permission.POST_NOTIFICATIONS
         if(missing.isNotEmpty()){pending=true;requestPermissions(missing.toTypedArray(),10)}
     }
+    private fun requestMediaLocation(){if(pending)return;val permissions=mutableListOf(Manifest.permission.ACCESS_MEDIA_LOCATION);if(Build.VERSION.SDK_INT>=33){permissions+=Manifest.permission.READ_MEDIA_IMAGES;permissions+=Manifest.permission.READ_MEDIA_VIDEO}else permissions+=Manifest.permission.READ_EXTERNAL_STORAGE;val missing=permissions.filter{checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED};if(missing.isNotEmpty()){pending=true;requestPermissions(missing.toTypedArray(),11)}}
     private fun special(kind:Int){
         try{if(kind==1)startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))else startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:$packageName")))}
         catch(_:Exception){toast("시스템 설정에서 CoolSync 권한을 확인하세요")}
@@ -107,6 +108,7 @@ class MainActivity:Activity() {
         permissionRow(body,"주변 기기","Mac과 Bluetooth로 연결",nearby()){requestRuntime()}
         permissionRow(body,"자동 복사","복사 동작 감지 · 접근성 설정",accessibility()){special(1)}
         permissionRow(body,"파일 관리","Mac에서 내부 저장소 탐색·편집",storage()){special(2)}
+        permissionRow(body,"사진 촬영 위치","사진첩에서 촬영 장소 표시 · 선택 사항",checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION)==PackageManager.PERMISSION_GRANTED){requestMediaLocation()}
         permissionRow(body,"알림","연결 상태 표시 · 선택 사항",notifications()){requestRuntime()}
         space(body,14);body.addView(label("파일 관리 권한도 앱 전용 데이터나 시스템 보호 폴더를 열 수 있게 하지는 않습니다.",12f,secondary))
         wizardContinue?.text=if(nearby()&&accessibility()&&storage())"완료"else "설정 계속"

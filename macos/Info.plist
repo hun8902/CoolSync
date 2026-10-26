@@ -20,6 +20,11 @@
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>연결한 Android 휴대폰과 클립보드를 공유하기 위해 Bluetooth를 사용합니다.</string>
 	<key>NSLocalNetworkUsageDescription</key>

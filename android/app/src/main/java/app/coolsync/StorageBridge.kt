@@ -26,7 +26,7 @@ object StorageBridge {
                 if(SyncService.active!==service || !service.authenticated || !sessionKey.contentEquals(Protocol.key(service) ?: byteArrayOf())) return@execute
                 val q=JSONObject(message.getString("text"));val fs=engine(service);val path=q.optString("path")
                 java.util.UUID.fromString(reference)
-                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent")){
+                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent","mediaFavorite","mediaAlbumCreate","mediaAlbumRename","mediaMove","mediaCopy","mediaTrash","mediaAlbumTrash")){
                     val prefs=service.getSharedPreferences("fs-replay",0)
                     val seen=(prefs.getStringSet("ids",emptySet()) ?: emptySet()).toMutableSet()
                     if(reference in seen)throw StorageFault("duplicate","이미 처리한 요청입니다. 목록을 새로 고침하세요.")
@@ -34,7 +34,7 @@ object StorageBridge {
                     seen.add(reference);prefs.edit().putStringSet("ids",seen).commit()
                 }
                 response.put("ok",true)
-                when(q.getString("op")) {
+                if(q.getString("op").startsWith("media")){GalleryMedia.handle(service,q,response)}else when(q.getString("op")) {
                     "list" -> {
                         val items=fs.list(path);val start=q.optInt("offset",0).coerceIn(0,items.size);val rows=JSONArray();var next=start
                         for(item in items.drop(start).take(50)) {
@@ -59,12 +59,12 @@ object StorageBridge {
                         }
                         response.put("trash",rows).put("next",next).put("total",items.size)
                     }
-                    "restore" -> fs.restore(q.getString("id"))
+                    "restore" -> {val id=q.getString("id");val original=fs.listTrash().firstOrNull{it.id==id}?.original;fs.restore(id);if(original!=null){val root=android.os.Environment.getExternalStorageDirectory();val restored=fs.resolve(original);val paths=if(restored.isDirectory)restored.walkTopDown().filter{it.isFile}.take(20000).map{it.relativeTo(root).invariantSeparatorsPath}.toList()else listOf(original);GalleryMedia.rescan(service,paths)}}
                     "deletePermanent" -> fs.permanentDelete(q.getString("id"))
                     "download" -> {
                         if(FilesBridge.busy || FilesBridge.offer!=null)throw StorageFault("busy","진행 중인 파일 작업을 먼저 마치세요")
                         val file=fs.resolve(path);if(!file.isFile)throw StorageFault("file","다운로드할 파일을 선택하세요")
-                        if(file.length()>FilesBridge.LIMIT)throw StorageFault("size","기기 간 전송은 파일당 256 MB 이하를 지원합니다")
+                        if(file.length()>FilesBridge.LIMIT)throw StorageFault("size","기기 간 전송은 파일당 8 GB 이하를 지원합니다")
                         main.post { if(service.authenticated) FilesBridge.select(service,Uri.fromFile(file),path) }
                     }
                     else -> throw StorageFault("operation","지원하지 않는 작업입니다")

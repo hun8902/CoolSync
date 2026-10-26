@@ -28,6 +28,7 @@ final class ExplorerModel:ObservableObject {
     @Published var needsSetup=false
     @Published var sort="name"
     @Published var ascending=true
+    var onFilesystemChange:(()->Void)?
     var send:((String,String,String)->Void)?
     var connected:(()->Bool)?
     weak var files:FileTransfer?
@@ -57,7 +58,7 @@ final class ExplorerModel:ObservableObject {
         guard let data=try? JSONSerialization.data(withJSONObject:q),let text=String(data:data,encoding:.utf8)else{return}
         callbacks[id]=completion
         let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.fail("기기 응답 시간이 지났습니다");callback(["ok":false,"error":"응답 시간 초과"])}
-        timers[id]=timer;DispatchQueue.main.asyncAfter(deadline:.now()+45,execute:timer);send?("fsRequest",text,id)
+        timers[id]=timer;let timeout:Double=["mediaCopy","mediaMove","mediaAlbumRename","mediaAlbumTrash"].contains(op) ? 600:45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
     }
     func handle(_ m:Wire.Message){
         guard let data=m.text.data(using:.utf8),let response=try? JSONSerialization.jsonObject(with:data)as?[String:Any]else{return}
@@ -131,11 +132,12 @@ final class ExplorerModel:ObservableObject {
             jobs=planned;queueActive=true;nextJob()
         }catch{fail("선택한 파일이나 폴더를 읽지 못했습니다")}
     }
-    func download(){
+    func download(move:Bool=false){
         let selected=entries.filter{selection.contains($0.path)};guard !selected.isEmpty else{return}
-        if selected.count==1 && !selected[0].directory{let panel=NSSavePanel();panel.nameFieldStringValue=selected[0].name;if panel.runModal() == .OK,let url=panel.url{enqueueDownloads(selected,to:url.deletingLastPathComponent(),single:url)}}
-        else{let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true;panel.prompt="여기에 복사";if panel.runModal() == .OK,let url=panel.url{enqueueDownloads(selected,to:url,single:nil)}}
+        if selected.count==1 && !selected[0].directory{let panel=NSSavePanel();panel.nameFieldStringValue=selected[0].name;if panel.runModal() == .OK,let url=panel.url{enqueueDownloads(selected,to:url.deletingLastPathComponent(),single:url){[weak self]error in if error==nil && move{self?.mutate("trash",["paths":selected.map{$0.path}])}}}}
+        else{let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true;panel.prompt="여기에 복사";if panel.runModal() == .OK,let url=panel.url{enqueueDownloads(selected,to:url,single:nil){[weak self]error in if error==nil && move{self?.mutate("trash",["paths":selected.map{$0.path}])}}}}
     }
+    func exportEntries(_ entries:[RemoteEntry],to folder:URL,completion:@escaping(Error?)->Void){enqueueDownloads(entries,to:folder,single:nil,completion:completion)}
     func promise(_ entry:RemoteEntry,to target:URL,completion:@escaping(Error?)->Void){
         if queueActive{promiseQueue.append((entry,target,completion));return}
         enqueueDownloads([entry],to:target.deletingLastPathComponent(),single:target){[weak self]error in
@@ -164,7 +166,7 @@ final class ExplorerModel:ObservableObject {
     private func nextJob(){
         guard queueActive else{return}
         jobDeadline?.cancel()
-        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let completion=promisedCompletion;promisedCompletion=nil;completion?(nil);reload();return}
+        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let completion=promisedCompletion;promisedCompletion=nil;completion?(nil);onFilesystemChange?();reload();return}
         let timeout=DispatchWorkItem{[weak self]in guard let self,self.queueActive,self.files?.hasTransfer != true else{return};self.stopJobs("파일 전송 요청에 응답이 없습니다")}
         jobDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+90,execute:timeout)
         busy=true;let job=jobs.removeFirst();status="남은 작업 \(jobs.count+1)개"

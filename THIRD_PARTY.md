@@ -8,3 +8,6 @@ QR code encoding uses fwcd/swift-qrcode-generator (Project Nayuki and fwcd), und
 
 ## Sparkle
 macOS 업데이트에 Sparkle 2.9.3 (https://github.com/sparkle-project/Sparkle)을 사용합니다. 배포 아카이브의 라이선스를 앱 Resources/Sparkle-LICENSE.txt에 포함합니다. 프레임워크는 공개 GitHub 배포본의 SHA-256을 확인한 뒤 빌드 시 내려받습니다.
+
+## AndroidX ExifInterface
+사진 메타데이터 읽기에 androidx.exifinterface:exifinterface:1.4.2를 사용합니다. Android Open Source Project, Apache License 2.0. 라이선스 본문은 저장소의 Apache 2.0 라이선스 문서를 참조하세요.
