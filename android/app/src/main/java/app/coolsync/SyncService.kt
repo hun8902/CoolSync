@@ -19,6 +19,7 @@ class SyncService : Service() {
     private val prefs by lazy { getSharedPreferences("sync",0) }
     private var receiverRegistered = false
     private var server: BluetoothGattServer? = null
+    private var bleGeneration=0
     private var advertiser: BluetoothLeAdvertiser? = null
     private var peer: BluetoothDevice? = null
     private var subscribed = false
@@ -66,30 +67,30 @@ class SyncService : Service() {
             }
         }
     }
-    private val callback = object : BluetoothGattServerCallback() {
-        override fun onServiceAdded(status: Int, service: BluetoothGattService?) { main.post { if(status == BluetoothGatt.GATT_SUCCESS) advertise() else update("BLE 서비스 생성 실패") } }
-        override fun onConnectionStateChange(d: BluetoothDevice, status: Int, state: Int) { main.post {
+    private fun callback(epoch:Int) = object : BluetoothGattServerCallback() {
+        override fun onServiceAdded(status: Int, service: BluetoothGattService?) { main.post { if(epoch!=bleGeneration)return@post; if(status == BluetoothGatt.GATT_SUCCESS) advertise() else update("BLE 서비스 생성 실패") } }
+        override fun onConnectionStateChange(d: BluetoothDevice, status: Int, state: Int) { main.post { if(epoch!=bleGeneration)return@post;
             if (state == BluetoothProfile.STATE_CONNECTED) {
                 if (peer != null && peer != d) { server?.cancelConnection(d); return@post }
                 resetPeer(); peer = d; main.removeCallbacks(waitTimeout); authProgress("응답 채널 설정")
             } else if (peer == d) { resetPeer(); advertise(); update(prefs.getString("connectionIssue",null) ?: "Mac 연결 대기") }
         } }
-        override fun onMtuChanged(d: BluetoothDevice, value: Int) { main.post { if(peer == d) mtu = value.coerceIn(23,517) } }
+        override fun onMtuChanged(d: BluetoothDevice, value: Int) { main.post { if(epoch!=bleGeneration)return@post; if(peer == d) mtu = value.coerceIn(23,517) } }
         override fun onDescriptorReadRequest(d: BluetoothDevice, id: Int, offset: Int, desc: BluetoothGattDescriptor) {
-            main.post { server?.sendResponse(d,id,if(offset == 0) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_INVALID_OFFSET,offset,if(subscribed) BluetoothGattDescriptor.ENABLE_INDICATION_VALUE else BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE) }
+            main.post { if(epoch!=bleGeneration)return@post; server?.sendResponse(d,id,if(offset == 0) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_INVALID_OFFSET,offset,if(subscribed) BluetoothGattDescriptor.ENABLE_INDICATION_VALUE else BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE) }
         }
-        override fun onDescriptorWriteRequest(d: BluetoothDevice, id: Int, desc: BluetoothGattDescriptor, prepared: Boolean, response: Boolean, offset: Int, value: ByteArray) { main.post {
+        override fun onDescriptorWriteRequest(d: BluetoothDevice, id: Int, desc: BluetoothGattDescriptor, prepared: Boolean, response: Boolean, offset: Int, value: ByteArray) { main.post { if(epoch!=bleGeneration)return@post;
             val valid = peer == d && desc.uuid.toString() == Protocol.CCC && !prepared && offset == 0 && value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
             if(valid) { subscribed = true; authProgress("Mac 인증 요청 대기") }
             if(response) server?.sendResponse(d,id,if(valid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null)
             if(valid)pendingHello?.let{pendingHello=null;handle(it)}
         } }
-        override fun onCharacteristicWriteRequest(d: BluetoothDevice, id: Int, characteristic: BluetoothGattCharacteristic, prepared: Boolean, response: Boolean, offset: Int, value: ByteArray) { main.post {
+        override fun onCharacteristicWriteRequest(d: BluetoothDevice, id: Int, characteristic: BluetoothGattCharacteristic, prepared: Boolean, response: Boolean, offset: Int, value: ByteArray) { main.post { if(epoch!=bleGeneration)return@post;
             val valid = peer == d && characteristic.uuid.toString() == Protocol.RX && !prepared && offset == 0 && value.size <= 514
             if(response) server?.sendResponse(d,id,if(valid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null)
             if(valid) { authProgress("인증 요청 수신"); receive(value) }
         } }
-        override fun onNotificationSent(d: BluetoothDevice, result: Int) { main.post {
+        override fun onNotificationSent(d: BluetoothDevice, result: Int) { main.post { if(epoch!=bleGeneration)return@post;
             if (peer != d) return@post
             main.removeCallbacks(sendTimeout)
             if(result != BluetoothGatt.GATT_SUCCESS) { sendTimeout.run(); return@post }
@@ -120,7 +121,7 @@ class SyncService : Service() {
             if(manager.adapter?.isEnabled != true) { update("블루투스를 켜주세요"); return }
             advertiser = manager.adapter.bluetoothLeAdvertiser
             if(advertiser == null) { update("이 기기는 BLE 광고를 지원하지 않습니다"); return }
-            server = manager.openGattServer(this,callback)
+            server = manager.openGattServer(this,callback(bleGeneration))
             if(server==null){update("BLE 서비스 시작 실패 · Bluetooth를 껐다 켜고 다시 연결하세요");return}
             val s = BluetoothGattService(UUID.fromString(Protocol.SERVICE),BluetoothGattService.SERVICE_TYPE_PRIMARY)
             s.addCharacteristic(BluetoothGattCharacteristic(UUID.fromString(Protocol.RX),BluetoothGattCharacteristic.PROPERTY_WRITE,BluetoothGattCharacteristic.PERMISSION_WRITE))
@@ -242,6 +243,7 @@ class SyncService : Service() {
         main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout)
     }
     private fun closeBle() {
+        bleGeneration++
         try { advertiser?.stopAdvertising(advert); peer?.let { server?.cancelConnection(it) }; server?.close() } catch (_: Exception) {}
         server = null; advertiser = null; resetPeer()
     }

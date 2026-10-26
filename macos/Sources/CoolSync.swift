@@ -91,6 +91,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var pending: Wire.Message?
     private var ackTask: DispatchWorkItem?
     private var connectionTask: DispatchWorkItem?
+    private var serviceChangeTask: DispatchWorkItem?
     private var writeTask: DispatchWorkItem?
     private var retryTask: DispatchWorkItem?
     private var session = UUID()
@@ -134,7 +135,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         clearSession()
     }
     private func clearSession() {
-        ackTask?.cancel(); connectionTask?.cancel(); writeTask?.cancel()
+        ackTask?.cancel(); connectionTask?.cancel(); writeTask?.cancel(); serviceChangeTask?.cancel()
         peer?.delegate = nil; peer = nil; rx = nil; authenticated = false
         writing = false; negotiatedWriteSize = 20; inFlightID = nil; input = Data(); outgoing = []; pending = nil; session = UUID()
     }
@@ -152,8 +153,11 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         if let values=advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID:Data], let identity=values[Wire.service], identity != Data(SHA256.hash(data:key).prefix(8)) { return }
         if let failed = failedCandidates[peripheral.identifier], Date().timeIntervalSince(failed) < 60 { return }
         central.stopScan(); peer = peripheral; peripheral.delegate = self
-        central.connect(peripheral,options:nil); status("휴대폰 인증 중")
-        authProgress("Bluetooth 연결")
+        if peripheral.state == .connected {
+            authProgress("서비스 검색"); peripheral.discoverServices([Wire.service])
+        } else {
+            central.connect(peripheral,options:nil); authProgress("Bluetooth 연결")
+        }
     }
     func centralManager(_ central: CBCentralManager,didConnect peripheral: CBPeripheral) { guard peer?.identifier==peripheral.identifier else { return }; authProgress("서비스 검색"); peripheral.discoverServices([Wire.service]) }
     func centralManager(_ central: CBCentralManager,didFailToConnect peripheral: CBPeripheral,error: Error?) { if disconnecting.remove(peripheral.identifier) != nil { scan(); return }; if let error { connectionIssue="Bluetooth 연결 실패 · " + error.localizedDescription }; lost(peripheral) }
@@ -173,6 +177,20 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             }
         }
         retryTask = task; DispatchQueue.main.asyncAfter(deadline:.now()+2,execute:task)
+    }
+    func peripheral(_ peripheral: CBPeripheral,didModifyServices invalidatedServices:[CBService]) {
+        guard peer?.identifier==peripheral.identifier, invalidatedServices.contains(where:{$0.uuid==Wire.service}) else { return }
+        // Android replaces its GATT service after app/service restart. Old handles cannot be reused.
+        ackTask?.cancel(); connectionTask?.cancel(); writeTask?.cancel(); serviceChangeTask?.cancel()
+        authenticated=false; rx=nil; pending=nil; outgoing=[]; input=Data(); writing=false; inFlightID=nil; helloID=""; session=UUID()
+        status("휴대폰 서비스 변경 · 연결 채널 다시 설정 중")
+        let epoch=session
+        let task=DispatchWorkItem { [weak self,weak peripheral] in
+            guard let self,let peripheral,self.session==epoch,self.peer?.identifier==peripheral.identifier else { return }
+            if peripheral.state == .connected { self.authProgress("서비스 다시 검색");peripheral.discoverServices([Wire.service]) }
+            else { self.authProgress("Bluetooth 재연결");self.central.connect(peripheral,options:nil) }
+        }
+        serviceChangeTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.3,execute:task)
     }
     func peripheral(_ peripheral: CBPeripheral,didDiscoverServices error: Error?) {
         guard peer?.identifier==peripheral.identifier else { return }
