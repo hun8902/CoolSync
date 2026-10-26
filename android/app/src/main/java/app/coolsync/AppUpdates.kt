@@ -29,6 +29,23 @@ object AppUpdates {
     var status="업데이트 확인";private set
     var available:JSONObject?=null;private set
     private var verified:File?=null
+    private var updateActivity:java.lang.ref.WeakReference<Activity>?=null
+    private var continueInstall=false
+    private var waitingPermission=false
+    fun update(a:Activity){
+        if(busy)return
+        updateActivity=java.lang.ref.WeakReference(a)
+        continueInstall=true
+        when { ready()->install(a); available!=null->download(a); else->check(a) }
+    }
+    fun resume(a:Activity){
+        if(waitingPermission){waitingPermission=false;if(a.packageManager.canRequestPackageInstalls()&&ready())install(a)else{continueInstall=false;publish("설치 권한이 필요합니다 · 눌러서 다시 시도")}}
+    }
+    private fun advance(){
+        val a=updateActivity?.get()
+        if(!continueInstall||a==null||a.isFinishing||a.isDestroyed){continueInstall=false;return}
+        if(ready())install(a) else if(available!=null)download(a) else continueInstall=false
+    }
     private fun publish(text:String){main.post{status=text;changed?.invoke()}}
     private fun localCode(c:Context)=c.packageManager.getPackageInfo(c.packageName,0).longVersionCode
     fun automatic(c:Context){val p=c.getSharedPreferences("updates",0);if(p.getBoolean("automatic",true)&&System.currentTimeMillis()-p.getLong("lastCheck",0)>86400000)check(c)}
@@ -49,7 +66,7 @@ object AppUpdates {
             val m=JSONObject(String(bytes,Charsets.UTF_8));require(m.getString("package")==c.packageName&&m.getInt("minSdk")<=Build.VERSION.SDK_INT){"이 기기와 호환되지 않는 업데이트"}
             require(m.getLong("size") in 1..MAX_APK&&m.getString("sha256").matches(Regex("[a-f0-9]{64}"))){"업데이트 정보 오류"}
             val u=Uri.parse(m.getString("url"));require(u.scheme=="https"&&u.host=="github.com"&&u.path?.startsWith("/hun8902/CoolSync/releases/download/")==true){"업데이트 주소 오류"}
-            main.post{available=m.takeIf{it.getLong("build")>localCode(c)};busy=false;status=if(available==null)"최신 상태"else "업데이트 가능";changed?.invoke()}
+            main.post{available=m.takeIf{it.getLong("build")>localCode(c)};busy=false;status=if(available==null)"최신 상태"else "업데이트 설치";changed?.invoke();advance()}
         }catch(e:Exception){main.post{busy=false;status=e.message ?: "업데이트 확인 실패";changed?.invoke()}}}
     }
     fun download(context:Context){
@@ -68,14 +85,15 @@ object AppUpdates {
             val actual=archive.signingInfo?.apkContentsSigners?.map{it.toCharsString()}?.toSet();val current=installed.signingInfo?.apkContentsSigners?.map{it.toCharsString()}?.toSet()
             require(!actual.isNullOrEmpty()&&actual==current){"APK 서명이 기존 앱과 다릅니다"}
             require(!target.exists()||target.delete());require(tmp.renameTo(target)){"업데이트 파일 저장 실패"}
-            main.post{verified=target;busy=false;status="설치 준비됨";changed?.invoke()}
+            main.post{verified=target;busy=false;status="설치 준비됨";changed?.invoke();advance()}
             }catch(e:Exception){tmp.delete();main.post{verified=null;busy=false;status=e.message ?: "다운로드 실패";changed?.invoke()}}
         }
     }
     fun ready()=verified?.isFile==true
     fun install(a:Activity){
         if(!ready())return
-        if(!a.packageManager.canRequestPackageInstalls()){a.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${a.packageName}")));return}
+        if(!a.packageManager.canRequestPackageInstalls()){waitingPermission=true;a.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${a.packageName}")));return}
+        continueInstall=false
         a.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://${a.packageName}.updates/CoolSync.apk"),"application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
     }
 }

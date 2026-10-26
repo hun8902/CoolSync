@@ -172,16 +172,19 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         retryTask = task; DispatchQueue.main.asyncAfter(deadline:.now()+2,execute:task)
     }
     func peripheral(_ peripheral: CBPeripheral,didDiscoverServices error: Error?) {
-        guard error == nil, let service = peripheral.services?.first(where:{$0.uuid == Wire.service}) else { central.cancelPeripheralConnection(peripheral); return }
+        guard peer?.identifier==peripheral.identifier else { return }
+        guard error == nil, let service = peripheral.services?.first(where:{$0.uuid == Wire.service}) else { failConnection("서비스 검색 실패 · " + (error?.localizedDescription ?? "휴대폰의 CoolSync 서비스를 찾지 못했습니다")); return }
         authProgress("연결 채널 검색"); peripheral.discoverCharacteristics([Wire.rx,Wire.tx],for:service)
     }
     func peripheral(_ peripheral: CBPeripheral,didDiscoverCharacteristicsFor service: CBService,error: Error?) {
         rx = service.characteristics?.first(where:{$0.uuid == Wire.rx})
-        guard error == nil, rx != nil, let tx = service.characteristics?.first(where:{$0.uuid == Wire.tx}) else { central.cancelPeripheralConnection(peripheral); return }
+        guard peer?.identifier==peripheral.identifier else { return }
+        guard error == nil, rx != nil, let tx = service.characteristics?.first(where:{$0.uuid == Wire.tx}) else { failConnection("연결 채널 검색 실패 · " + (error?.localizedDescription ?? "휴대폰에서 연결을 다시 시작하세요")); return }
         authProgress("응답 채널 설정"); peripheral.setNotifyValue(true,for:tx)
     }
     func peripheral(_ peripheral: CBPeripheral,didUpdateNotificationStateFor characteristic: CBCharacteristic,error: Error?) {
-        guard characteristic.uuid == Wire.tx, error == nil, characteristic.isNotifying else { central.cancelPeripheralConnection(peripheral); return }
+        guard peer?.identifier==peripheral.identifier, characteristic.uuid == Wire.tx else { return }
+        guard error == nil, characteristic.isNotifying else { failConnection("응답 채널 설정 실패 · " + (error?.localizedDescription ?? "휴대폰이 응답 수신을 허용하지 않았습니다")); return }
         negotiatedWriteSize=max(20,min(180,peripheral.maximumWriteValueLength(for:.withResponse)))
         authProgress("인증 응답 대기")
         var m = Wire.Message(type:"hello"); m.text = String(data:(try? JSONSerialization.data(withJSONObject:["name":Host.current().localizedName ?? "Mac"])) ?? Data(),encoding:.utf8) ?? ""; helloID = m.id; send(m)
@@ -204,12 +207,12 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         guard !writing, !outgoing.isEmpty, let p = peer, let c = rx else { return }
         let chunk = outgoing.removeFirst(); inFlightID = chunk.clipID
         writing = true; p.writeValue(chunk.bytes,for:c,type:.withResponse)
-        let task = DispatchWorkItem { [weak self, weak p] in if let self, let p { self.central.cancelPeripheralConnection(p) } }
+        let task = DispatchWorkItem { [weak self, weak p] in if let self, let p, self.peer?.identifier==p.identifier { self.failConnection("Bluetooth 전송 시간 초과 · 휴대폰의 수신 응답이 없습니다") } }
         writeTask?.cancel(); writeTask = task; DispatchQueue.main.asyncAfter(deadline:.now()+8,execute:task)
     }
     func peripheral(_ peripheral: CBPeripheral,didWriteValueFor characteristic: CBCharacteristic,error: Error?) {
         writeTask?.cancel()
-        if error != nil { central.cancelPeripheralConnection(peripheral); return }
+        if let error { failConnection("Bluetooth 전송 실패 · " + error.localizedDescription); return }
         if let id = inFlightID, let m = pending, m.id == id { awaitAck(m,retry:retries == 0) }
         inFlightID = nil; writing = false; pump()
     }

@@ -48,9 +48,9 @@ final class DashboardModel: ObservableObject {
     }
     var pairURL: String { var url=URLComponents(); url.scheme="coolsync"; url.host="pair"; url.queryItems=[URLQueryItem(name:"key",value:keyHex),URLQueryItem(name:"name",value:Host.current().localizedName ?? "Mac")]; return url.string ?? "" }
     func reset() {
-        let alert=NSAlert(); alert.messageText="다른 휴대폰에 연결할까요?"; alert.informativeText="연결 키를 바꾸면 기존 휴대폰은 다시 QR을 스캔해야 합니다."; alert.addButton(withTitle:"새 연결 만들기"); alert.addButton(withTitle:"취소")
+        let alert=NSAlert(); alert.messageText="기존 등록을 지우고 새로 연결할까요?"; alert.informativeText="기존 연결 키와 휴대폰 정보를 초기화합니다. 휴대폰의 CoolSync에서 QR 스캔을 눌러 새 QR을 스캔하세요."; alert.addButton(withTitle:"새 연결 만들기"); alert.addButton(withTitle:"취소")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do { let key=try KeyStore.replace(); explorer.connectionEnded(); files.cancel(); engine?.replaceKey(key); keyHex=key.map{String(format:"%02x",$0)}.joined(); pairing=true } catch { status="연결 키 저장 실패" }
+        do { let key=try KeyStore.replace(); explorer.connectionEnded(); files.cancel(); engine?.replaceKey(key); keyHex=key.map{String(format:"%02x",$0)}.joined(); name="연결된 휴대폰 없음";model="";system="";connectionIssue="";pairing=true;tab=0;UserDefaults.standard.removeObject(forKey:"peerName");UserDefaults.standard.removeObject(forKey:"peerModel") } catch { status="연결 키 저장 실패" }
     }
 }
 
@@ -85,19 +85,46 @@ struct CoolDashboard:View {
     }
     private func location(_ title:String,_ icon:String,_ path:String)->some View{Button{model.tab=1;model.explorer.browse(path)}label:{Label(title,systemImage:icon).frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,7).padding(.horizontal,6).background(model.tab==1 && !model.explorer.trashMode && model.explorer.path==path ? Color.blue.opacity(0.12):.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)}
     private var connection:some View{
-        ScrollView{
-            VStack(alignment:.leading,spacing:24){
-                Text("기기 연결").font(.system(size:22,weight:.semibold))
-                VStack(spacing:12){detail("휴대폰",model.name);detail("모델",model.model.isEmpty ? "—":model.model);detail("Android",model.system.isEmpty ? "—":model.system);detail("상태",model.status);detail("마지막 동기화",model.lastSync.map{DateFormatter.localizedString(from:$0,dateStyle:.none,timeStyle:.short)} ?? "—")}
-                HStack{Button(model.connected ? "다시 연결":"연결 / 재연결"){model.engine?.reconnect()}.buttonStyle(.borderedProminent);Button("연결 문제 확인"){model.showConnectionIssue=true}.buttonStyle(.bordered)}
-                if !model.connectionIssue.isEmpty{Text(model.connectionIssue).font(.system(size:13)).foregroundStyle(.red).textSelection(.enabled)}
-                Divider()
-                if model.pairing || !model.connected{
-                    HStack(alignment:.center,spacing:24){if let image=QRImage.make(model.pairURL){Image(nsImage:image).interpolation(.none).resizable().frame(width:168,height:168).padding(8).background(.white)}
-                        VStack(alignment:.leading,spacing:12){Text("휴대폰 카메라로 QR 스캔").font(.system(size:15,weight:.medium));Text("링크를 열면 연결됩니다. 처음에는 휴대폰에서 권한 설정을 완료하세요.").font(.system(size:13)).foregroundStyle(.secondary);Button("연결 키 복사"){NSPasteboard.general.clearContents();NSPasteboard.general.setString(model.keyHex,forType:.string);NSPasteboard.general.setData(Data(),forType:.init("org.nspasteboard.ConcealedType"))}}}
-                }else{HStack{Button("파일 탐색"){model.tab=1;model.explorer.reload()}.buttonStyle(.borderedProminent);Button("연결 관리"){model.tab=2}.buttonStyle(.bordered)}}
-                Spacer()
-            }.padding(30).frame(maxWidth:720,alignment:.leading).frame(maxWidth:.infinity)
+        ScrollView {
+            VStack(alignment:.leading,spacing:20) {
+                HStack { Text("연결").font(.largeTitle.bold()); Spacer();
+                    Button { model.engine?.reconnect() } label: { Label("다시 연결",systemImage:"arrow.clockwise") }.buttonStyle(.bordered)
+                }
+                HStack(alignment:.top,spacing:20) {
+                    VStack(alignment:.leading,spacing:16) {
+                        HStack(spacing:12) {
+                            Image(systemName:"iphone.gen3").font(.system(size:32)).foregroundStyle(.blue)
+                            VStack(alignment:.leading,spacing:4) {
+                                Text(model.name).font(.title3.bold())
+                                Label(model.connected ? "연결됨":"미연결",systemImage:model.connected ? "checkmark.circle.fill":"circle.dashed").font(.subheadline).foregroundStyle(model.connected ? .green:.secondary)
+                            }
+                        }
+                        Divider()
+                        Text(model.status).font(.callout).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
+                        if !model.model.isEmpty { detail("모델",model.model) }
+                        if !model.system.isEmpty { detail("Android",model.system) }
+                        detail("마지막 복사",model.lastSync.map{DateFormatter.localizedString(from:$0,dateStyle:.none,timeStyle:.short)} ?? "아직 없음")
+                        if !model.connectionIssue.isEmpty { Text(model.connectionIssue).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+                        Button("연결 문제 확인"){model.showConnectionIssue=true}.buttonStyle(.bordered)
+                        Button("등록 해제 및 새 연결",role:.destructive){model.reset()}.buttonStyle(.borderless)
+                    }.padding(20).frame(maxWidth:.infinity,alignment:.leading).background(.regularMaterial,in:RoundedRectangle(cornerRadius:24))
+                    if !model.connected || model.pairing {
+                        VStack(spacing:14) {
+                            Text("QR로 연결").font(.headline)
+                            if let image=QRImage.make(model.pairURL) { Image(nsImage:image).interpolation(.none).resizable().frame(width:184,height:184).padding(12).background(.white,in:RoundedRectangle(cornerRadius:18)) }
+                            Text("휴대폰 CoolSync에서\n연결 → QR 스캔").font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                            Button("연결 정보 복사"){NSPasteboard.general.clearContents();NSPasteboard.general.setString(model.pairURL,forType:.string);NSPasteboard.general.setData(Data(),forType:.init("org.nspasteboard.ConcealedType"))}.buttonStyle(.bordered)
+                        }.padding(20).frame(width:224).background(.regularMaterial,in:RoundedRectangle(cornerRadius:24))
+                    }
+                }
+                if model.connected {
+                    HStack(spacing:12) {
+                        Button { model.tab=3 } label: { Label("클립보드",systemImage:"clipboard") }
+                        Button { model.tab=1;model.explorer.reload() } label: { Label("파일 탐색",systemImage:"folder") }
+                        Button { model.tab=4 } label: { Label("사진첩",systemImage:"photo.on.rectangle") }
+                    }.buttonStyle(.borderedProminent).controlSize(.large)
+                }
+            }.padding(24).frame(maxWidth:.infinity,alignment:.leading)
         }
     }
     private var settings:some View{
