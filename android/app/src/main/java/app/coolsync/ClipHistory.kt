@@ -23,7 +23,7 @@ object ClipHistory {
         if(!enabled(c))return
         val items=entries(c).toMutableList()
         val duplicate=items.firstOrNull{it.optString("text").isNotEmpty()&&it.optString("text")==item.optString("text")}
-        if(duplicate!=null){item.put("favorite",duplicate.optBoolean("favorite"));items.remove(duplicate)}
+        if(duplicate!=null){item.put("id",duplicate.getString("id"));item.put("favorite",duplicate.optBoolean("favorite"));items.remove(duplicate)}
         while(items.size>=200){val old=items.lastOrNull{!it.optBoolean("favorite")} ?: return;items.remove(old);old.optString("image").takeIf{it.isNotEmpty()}?.let{File(folder(c),it).delete()}}
         fun bytes()=items.sumOf{it.optString("image").takeIf{n->n.isNotEmpty()}?.let{n->File(folder(c),n).length()} ?: 0L}
         val added=item.optString("image").takeIf{it.isNotEmpty()}?.let{File(folder(c),it).length()} ?: 0L
