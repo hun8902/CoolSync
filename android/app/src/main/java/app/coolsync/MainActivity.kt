@@ -123,7 +123,7 @@ class MainActivity:Activity() {
     private fun space(parent:LinearLayout,n:Int=16){parent.addView(Space(this),LinearLayout.LayoutParams(1,dp(n)))}
     private fun divider(parent:LinearLayout){parent.addView(View(this).apply{setBackgroundColor(if(paper==Color.WHITE)0xffe4e4e8.toInt()else 0xff3b3b3f.toInt())},LinearLayout.LayoutParams(-1,dp(1)))}
     private fun surface():android.graphics.drawable.Drawable=GradientDrawable(GradientDrawable.Orientation.TL_BR,if(paper==Color.WHITE)intArrayOf(0xfaffffff.toInt(),0xdfffffff.toInt())else intArrayOf(0xf232343a.toInt(),0xe51c1d24.toInt())).apply{cornerRadius=dp(22).toFloat();setStroke(dp(1),if(paper==Color.WHITE)0xffffffff.toInt()else 0xff4c4e58.toInt())}
-    private fun group(parent:LinearLayout,title:String):LinearLayout{parent.addView(label(title,12f,secondary,true).apply{setPadding(dp(14),0,0,0)});space(parent,9);val g=column();g.setPadding(dp(18),dp(2),dp(18),dp(2));g.background=surface();g.elevation=dp(1).toFloat();parent.addView(g,LinearLayout.LayoutParams(-1,-2));space(parent,26);return g}
+    private fun group(parent:LinearLayout,title:String):LinearLayout{parent.addView(label(title,12f,secondary,true).apply{setPadding(dp(14),0,0,0)});space(parent,9);val g=column();g.setPadding(dp(18),dp(2),dp(18),dp(2));g.background=surface();g.elevation=dp(1).toFloat();parent.addView(g,LinearLayout.LayoutParams(-1,-2));space(parent,16);return g}
     private fun interactive(view:View,action:()->Unit){view.isFocusable=true;view.setOnClickListener{it.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);action()};view.setOnTouchListener{v,e->when(e.actionMasked){MotionEvent.ACTION_DOWN->v.animate().scaleX(.975f).scaleY(.975f).setDuration(100).start();MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->v.animate().scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(android.view.animation.OvershootInterpolator(.6f)).start()};false}}
     private fun row(parent:LinearLayout,title:String,value:String,detail:String?=null,action:(()->Unit)?=null){
         if(parent.childCount>0)divider(parent)
@@ -136,7 +136,7 @@ class MainActivity:Activity() {
         if(parent.childCount>0)divider(parent)
         val line=LinearLayout(this);line.gravity=Gravity.CENTER_VERTICAL;line.minimumHeight=dp(58);line.setPadding(0,dp(12),0,dp(12));line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f));val control=GlassToggle(this,checked,blue,changed).apply{contentDescription=title};line.addView(control,LinearLayout.LayoutParams(dp(50),dp(30)).apply{leftMargin=dp(18)});line.setOnClickListener{control.performClick()};parent.addView(line)
     }
-    private fun fingerprint()="${SyncService.active?.authenticated}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}:${if(selectedTab==1)ClipHistory.revision else 0}"
+    private fun fingerprint()="${SyncService.active?.authenticated}:${prefs.getString("connectionIssue",null)}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}:${if(selectedTab==1)ClipHistory.revision else 0}"
     private fun refreshLive(){
         if(fingerprint()!=liveFingerprint){render();return}
         connectionDetail?.text=connectionText()
@@ -166,26 +166,31 @@ class MainActivity:Activity() {
         ink=if(dark)0xfff4f4f6.toInt()else 0xff1c1c1e.toInt();secondary=if(dark)0xffa0a0a6.toInt()else 0xff707078.toInt();paper=if(dark)0xff1c1c1e.toInt()else Color.WHITE
         val root=FrameLayout(this);root.background=GradientDrawable(GradientDrawable.Orientation.TL_BR,if(dark)intArrayOf(0xff151923.toInt(),0xff101117.toInt(),0xff1e1724.toInt())else intArrayOf(0xffeaf3ff.toInt(),0xfff4f4f9.toInt(),0xfff8edf4.toInt()))
         root.setOnApplyWindowInsetsListener{view,insets->val bars=insets.getInsets(WindowInsets.Type.systemBars());view.setPadding(bars.left,bars.top,bars.right,bars.bottom);insets}
-        val scroll=ScrollView(this);scroll.clipToPadding=false;scroll.setPadding(0,0,0,dp(100));root.addView(scroll,FrameLayout.LayoutParams(-1,-1))
+        val scroll=ScrollView(this);scroll.clipToPadding=true;scroll.setPadding(0,0,0,dp(94));root.addView(scroll,FrameLayout.LayoutParams(-1,-1))
         val frame=FrameLayout(this);scroll.addView(frame)
-        val body=column();body.setPadding(dp(20),dp(24),dp(20),dp(20));frame.addView(body,FrameLayout.LayoutParams(dp((resources.configuration.screenWidthDp-0).coerceAtMost(560)),-2,Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        val wide=resources.configuration.screenWidthDp>=720
+        val body=column();body.setPadding(dp(20),dp(16),dp(20),dp(12));frame.addView(body,FrameLayout.LayoutParams(-1,-2))
         val titles=listOf("연결","클립보드","파일","설정")
-        body.addView(label(titles[selectedTab],30f,ink,true));space(body,24)
+        body.addView(label(titles[selectedTab],30f,ink,true));space(body,16)
         when(selectedTab){
             0->{
                 val connected=SyncService.active?.authenticated==true
-                val device=group(body,"MY MAC")
+                val panels=LinearLayout(this).apply{orientation=if(wide)LinearLayout.HORIZONTAL else LinearLayout.VERTICAL};body.addView(panels)
+                val left=column();val right=column()
+                panels.addView(left,LinearLayout.LayoutParams(if(wide)0 else -1,-2,if(wide)1f else 0f).apply{if(wide)rightMargin=dp(20)})
+                panels.addView(right,LinearLayout.LayoutParams(if(wide)0 else -1,-2,if(wide)1f else 0f))
+                val device=group(left,"연결 기기")
                 val top=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;setPadding(0,dp(16),0,dp(16))}
                 top.addView(LinkIcon(this,0,blue),LinearLayout.LayoutParams(dp(38),dp(38)))
                 val title=column();title.setPadding(dp(14),0,0,0);title.addView(label(prefs.getString("macName","연결할 Mac") ?: "Mac",20f,ink,true));connectionBadge=label(if(connected)"연결됨"else"미연결",13f,if(connected)0xff248a3d.toInt()else secondary);title.addView(connectionBadge);top.addView(title,LinearLayout.LayoutParams(0,-2,1f));device.addView(top)
-                connectionDetail=label(connectionText(),15f,secondary);device.addView(connectionDetail);space(device,18)
-                if(Protocol.key(this)==null){button(device,"Mac 연결하기"){manualKey()}}else{button(device,if(connected)"다시 연결"else"연결 시작 / 재연결"){reconnect()};if(prefs.getBoolean("enabled",false))button(device,"연결 중지",false){pauseConnection()}}
-                val setup=group(body,"연결 설정")
+                connectionDetail=label(connectionText(),15f,secondary);device.addView(connectionDetail);space(device,12)
+                if(Protocol.key(this)==null){button(device,"Mac 연결하기"){manualKey()}}else{val actions=LinearLayout(this);device.addView(actions);val start=column();actions.addView(start,LinearLayout.LayoutParams(0,-2,1f));button(start,if(connected)"다시 연결"else"연결하기"){reconnect()};if(prefs.getBoolean("enabled",false)){val stop=column();actions.addView(stop,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=dp(10)});button(stop,"중지",false){pauseConnection()}}}
+                val setup=group(right,"연결 설정")
                 row(setup,"연결 정보 입력","›","Mac의 QR을 스캔하거나 연결 정보를 붙여넣으세요.",action={manualKey()})
                 row(setup,"권한 설정",if(nearby())"확인 ›"else"허용 필요 ›",action={showPermissions()})
                 row(setup,"연결 문제 확인","›",action={diagnostics()})
                 val issue=prefs.getString("connectionIssue",null)
-                if(issue!=null){val g=group(body,"최근 연결 문제");g.addView(label(issue,14f,secondary));space(g,12);button(g,"원인과 해결 방법",false){diagnostics()}}
+                if(issue!=null){val g=group(left,"최근 연결 문제");g.addView(label(issue,14f,secondary));space(g,12);button(g,"원인과 해결 방법",false){diagnostics()}}
             }
             1->{
                 val tools=group(body,"클립보드")

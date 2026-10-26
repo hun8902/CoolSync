@@ -22,6 +22,7 @@ class SyncService : Service() {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var peer: BluetoothDevice? = null
     private var subscribed = false
+    private var handshakeStage = "Bluetooth 연결"
     @Volatile var authenticated = false; private set
     private var mtu = 23
     var status = "시작 중"; private set
@@ -48,10 +49,12 @@ class SyncService : Service() {
         else { pending = null; update("전송 확인 실패 · 다음 복사 때 재시도") }
     }
     private val waitTimeout = Runnable { if(!authenticated) update("Mac을 찾지 못했습니다 · Mac 앱 실행과 Bluetooth 권한을 확인하고 다시 연결하세요") }
-    private val linkTimeout = Runnable { peer?.let { server?.cancelConnection(it) }; resetPeer(); advertise(); update("Mac 인증 시간 초과 · Mac의 현재 QR을 다시 스캔하세요") }
+    private val linkTimeout = Runnable { failLink("연결 시간 초과 · $handshakeStage 단계에서 응답이 없습니다") }
+    private fun failLink(reason: String) { val d=peer; resetPeer(); update(reason); d?.let { server?.cancelConnection(it) }; advertise() }
+    private fun authProgress(stage: String) { if(authenticated)return; handshakeStage=stage; main.removeCallbacks(linkTimeout); main.postDelayed(linkTimeout,30000); update("Mac 연결 중 · $stage") }
     private val sendTimeout = Runnable { peer?.let { server?.cancelConnection(it) }; resetPeer(); advertise(); update("연결 복구 대기") }
     private val advert = object : AdvertiseCallback() {
-        override fun onStartSuccess(settings: AdvertiseSettings?) { main.post { update("Mac 연결 대기 · Mac에서 CoolSync를 열어주세요"); main.removeCallbacks(waitTimeout); main.postDelayed(waitTimeout,30000) } }
+        override fun onStartSuccess(settings: AdvertiseSettings?) { main.post { if(peer==null && prefs.getString("connectionIssue",null)==null) { update("Mac 연결 대기 · Mac에서 CoolSync를 열어주세요"); main.removeCallbacks(waitTimeout); main.postDelayed(waitTimeout,30000) } } }
         override fun onStartFailure(code: Int) { main.post { if (code != ADVERTISE_FAILED_ALREADY_STARTED) update(when(code){ADVERTISE_FAILED_TOO_MANY_ADVERTISERS->"BLE 광고 실패 · 사용 중인 Bluetooth 앱을 닫고 다시 연결하세요";ADVERTISE_FAILED_FEATURE_UNSUPPORTED->"BLE 광고 미지원 · 이 기기의 Bluetooth 기능을 확인하세요";else->"BLE 광고 실패 ($code) · Bluetooth를 껐다 켜고 다시 연결하세요"}) } }
     }
     private val bluetoothReceiver = object : BroadcastReceiver() {
@@ -67,8 +70,8 @@ class SyncService : Service() {
         override fun onConnectionStateChange(d: BluetoothDevice, status: Int, state: Int) { main.post {
             if (state == BluetoothProfile.STATE_CONNECTED) {
                 if (peer != null && peer != d) { server?.cancelConnection(d); return@post }
-                resetPeer(); peer = d; main.postDelayed(linkTimeout,15000); update("Mac 인증 중")
-            } else if (peer == d) { resetPeer(); advertise(); update("Mac 연결 대기") }
+                resetPeer(); peer = d; main.removeCallbacks(waitTimeout); authProgress("응답 채널 설정")
+            } else if (peer == d) { resetPeer(); advertise(); update(prefs.getString("connectionIssue",null) ?: "Mac 연결 대기") }
         } }
         override fun onMtuChanged(d: BluetoothDevice, value: Int) { main.post { if(peer == d) mtu = value.coerceIn(23,517) } }
         override fun onDescriptorReadRequest(d: BluetoothDevice, id: Int, offset: Int, desc: BluetoothGattDescriptor) {
@@ -76,13 +79,13 @@ class SyncService : Service() {
         }
         override fun onDescriptorWriteRequest(d: BluetoothDevice, id: Int, desc: BluetoothGattDescriptor, prepared: Boolean, response: Boolean, offset: Int, value: ByteArray) { main.post {
             val valid = peer == d && desc.uuid.toString() == Protocol.CCC && !prepared && offset == 0 && value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
-            if(valid) subscribed = true
+            if(valid) { subscribed = true; authProgress("Mac 인증 요청 대기") }
             if(response) server?.sendResponse(d,id,if(valid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null)
         } }
         override fun onCharacteristicWriteRequest(d: BluetoothDevice, id: Int, characteristic: BluetoothGattCharacteristic, prepared: Boolean, response: Boolean, offset: Int, value: ByteArray) { main.post {
             val valid = peer == d && characteristic.uuid.toString() == Protocol.RX && !prepared && offset == 0 && value.size <= 514
             if(response) server?.sendResponse(d,id,if(valid) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null)
-            if(valid) receive(value)
+            if(valid) { authProgress("인증 요청 수신"); receive(value) }
         } }
         override fun onNotificationSent(d: BluetoothDevice, result: Int) { main.post {
             if (peer != d) return@post
@@ -151,7 +154,7 @@ class SyncService : Service() {
         for(b in bytes) {
             if(b == 10.toByte()) {
                 val frame = input.toByteArray(); input.reset()
-                try { val key = Protocol.key(this) ?: return; handle(Protocol.open(key,frame)) } catch (_: Exception) { update("인증 실패 · 두 기기의 연결 키와 시간을 확인하세요") }
+                try { val key = Protocol.key(this) ?: return; handle(Protocol.open(key,frame)) } catch (_: Exception) { failLink("인증 실패 · Mac의 현재 QR로 다시 연결하고 두 기기의 자동 날짜·시간을 확인하세요"); return }
             } else {
                 if(input.size() >= Protocol.MAX_FRAME) { sendTimeout.run(); return }
                 input.write(b.toInt())

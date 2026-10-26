@@ -96,6 +96,14 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var failedCandidates: [UUID:Date] = [:]
     private var negotiatedWriteSize = 20
     private var helloID = ""
+    private var connectionIssue: String?
+    private func failConnection(_ message: String) { connectionIssue=message; status(message); if let p=peer { central.cancelPeripheralConnection(p) } }
+    private func authProgress(_ stage: String) {
+        guard !authenticated, let p=peer else { return }; connectionTask?.cancel(); status("휴대폰 연결 중 · " + stage)
+        let token=session
+        let task=DispatchWorkItem { [weak self] in guard let self, self.session==token, !self.authenticated else { return }; self.failedCandidates[p.identifier]=Date(); self.failConnection("연결 시간 초과 · " + stage + " 단계에서 응답이 없습니다") }
+        connectionTask=task; DispatchQueue.main.asyncAfter(deadline:.now()+30,execute:task)
+    }
     private var versionTime: Int64 = 0
     private var versionID = ""
     init(key: Data) {
@@ -113,7 +121,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     @objc private func screenUnlocked() { locked = false; lastChange = NSPasteboard.general.changeCount }
     @objc private func willSleep() { sleeping = true; disconnect(); status("Mac 잠자기") }
     @objc private func didWake() { sleeping = false; scan() }
-    func reconnect() { enabled = true; disconnect(); failedCandidates = [:]; centralManagerDidUpdateState(central) }
+    func reconnect() { connectionIssue=nil; enabled = true; disconnect(); failedCandidates = [:]; centralManagerDidUpdateState(central) }
     func toggle() { enabled.toggle(); if enabled { scan() } else { disconnect(); status("공유 중지됨") } }
     func replaceKey(_ value: Data) { disconnect(); key = value; versionTime = 0; versionID = ""; seen = []; UserDefaults.standard.removeObject(forKey:"receivedIDs"); failedCandidates = [:]; scan() }
     func sendControl(_ type: String,_ text: String,_ ref: String) { guard authenticated else { return }; var m=Wire.Message(type:type); m.text=text; m.ref=ref; send(m) }
@@ -130,7 +138,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
     private func scan() {
         guard enabled, !sleeping, central.state == .poweredOn, peer == nil else { return }
-        status("휴대폰 연결 대기")
+        status(connectionIssue ?? "휴대폰 연결 대기")
         central.scanForPeripherals(withServices:[Wire.service],options:[CBCentralManagerScanOptionAllowDuplicatesKey:false])
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -142,19 +150,14 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         if let failed = failedCandidates[peripheral.identifier], Date().timeIntervalSince(failed) < 60 { return }
         central.stopScan(); peer = peripheral; peripheral.delegate = self
         central.connect(peripheral,options:nil); status("휴대폰 인증 중")
-        let token = session
-        let task = DispatchWorkItem { [weak self] in
-            guard let self, self.session == token, !self.authenticated else { return }
-            self.status("휴대폰 인증 시간 초과 · 휴대폰에서 현재 QR을 다시 스캔하세요"); self.failedCandidates[peripheral.identifier] = Date(); self.central.cancelPeripheralConnection(peripheral)
-        }
-        connectionTask = task; DispatchQueue.main.asyncAfter(deadline:.now()+15,execute:task)
+        authProgress("Bluetooth 연결")
     }
-    func centralManager(_ central: CBCentralManager,didConnect peripheral: CBPeripheral) { peripheral.discoverServices([Wire.service]) }
+    func centralManager(_ central: CBCentralManager,didConnect peripheral: CBPeripheral) { guard peer?.identifier==peripheral.identifier else { return }; authProgress("서비스 검색"); peripheral.discoverServices([Wire.service]) }
     func centralManager(_ central: CBCentralManager,didFailToConnect peripheral: CBPeripheral,error: Error?) { lost(peripheral) }
     func centralManager(_ central: CBCentralManager,didDisconnectPeripheral peripheral: CBPeripheral,error: Error?) { lost(peripheral) }
     private func lost(_ peripheral: CBPeripheral) {
         guard peer?.identifier == peripheral.identifier else { return }
-        clearSession(); status("연결 끊김 · 다시 찾는 중")
+        clearSession(); status(connectionIssue ?? "연결 끊김 · 다시 찾는 중")
         let task = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.scan()
@@ -170,15 +173,17 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
     func peripheral(_ peripheral: CBPeripheral,didDiscoverServices error: Error?) {
         guard error == nil, let service = peripheral.services?.first(where:{$0.uuid == Wire.service}) else { central.cancelPeripheralConnection(peripheral); return }
-        peripheral.discoverCharacteristics([Wire.rx,Wire.tx],for:service)
+        authProgress("연결 채널 검색"); peripheral.discoverCharacteristics([Wire.rx,Wire.tx],for:service)
     }
     func peripheral(_ peripheral: CBPeripheral,didDiscoverCharacteristicsFor service: CBService,error: Error?) {
         rx = service.characteristics?.first(where:{$0.uuid == Wire.rx})
         guard error == nil, rx != nil, let tx = service.characteristics?.first(where:{$0.uuid == Wire.tx}) else { central.cancelPeripheralConnection(peripheral); return }
-        peripheral.setNotifyValue(true,for:tx)
+        authProgress("응답 채널 설정"); peripheral.setNotifyValue(true,for:tx)
     }
     func peripheral(_ peripheral: CBPeripheral,didUpdateNotificationStateFor characteristic: CBCharacteristic,error: Error?) {
         guard characteristic.uuid == Wire.tx, error == nil, characteristic.isNotifying else { central.cancelPeripheralConnection(peripheral); return }
+        negotiatedWriteSize=max(20,min(180,peripheral.maximumWriteValueLength(for:.withResponse)))
+        authProgress("인증 응답 대기")
         var m = Wire.Message(type:"hello"); m.text = String(data:(try? JSONSerialization.data(withJSONObject:["name":Host.current().localizedName ?? "Mac"])) ?? Data(),encoding:.utf8) ?? ""; helloID = m.id; send(m)
     }
     private func send(_ message: Wire.Message) {
@@ -214,7 +219,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             if b == 10 {
                 let frame = input; input = Data()
                 do { try handle(Wire.open(frame,key:key)) }
-                catch { status("인증 실패 · 연결 키와 시간을 확인하세요"); failedCandidates[peripheral.identifier] = Date(); central.cancelPeripheralConnection(peripheral); return }
+                catch { failedCandidates[peripheral.identifier] = Date(); failConnection("인증 실패 · 현재 QR로 다시 연결하고 두 기기의 자동 날짜·시간을 확인하세요"); return }
             } else {
                 guard input.count < Wire.maxFrame else { central.cancelPeripheralConnection(peripheral); return }
                 input.append(b)
@@ -230,7 +235,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                 peerOS = String((info["android"] as? String ?? "").prefix(24))
                 UserDefaults.standard.set(peerName,forKey:"peerName"); UserDefaults.standard.set(peerModel,forKey:"peerModel")
             } else { negotiatedWriteSize = max(20,min(180,Int(m.text) ?? 20)) }
-            authenticated = true; connectionTask?.cancel(); failedCandidates = [:]
+            authenticated = true; connectionIssue=nil; connectionTask?.cancel(); failedCandidates = [:]
             // Persist only a successfully authenticated peripheral for future diagnostics.
             UserDefaults.standard.set(peer?.identifier.uuidString,forKey:"peer")
             status("연결됨 · 복사 대기"); startClipboardMonitor(); return
