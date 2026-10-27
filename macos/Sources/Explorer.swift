@@ -91,7 +91,7 @@ final class ExplorerModel:ObservableObject {
         guard let data=try? JSONSerialization.data(withJSONObject:q),let text=String(data:data,encoding:.utf8)else{return}
         callbacks[id]=completion;if quiet{quietCalls.insert(id)}
         let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.quietCalls.remove(id);if !quiet{self.fail("기기 응답 시간이 지났습니다")};callback(["ok":false,"error":"응답 시간 초과"])}
-        timers[id]=timer;let timeout:Double=["mediaSync","mediaSession","mediaAlignDates"].contains(op) ? 180:["mediaCopy","mediaMove","mediaAlbumRename","mediaAlbumTrash"].contains(op) ? 600:45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
+        timers[id]=timer;let timeout:Double=["mediaSync","mediaSession","mediaAlignDates","mediaTrashChecked"].contains(op) ? 180:["mediaCopy","mediaMove","mediaAlbumRename","mediaAlbumTrash"].contains(op) ? 600:45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
     }
     func callPhoto(_ op:String,_ fields:[String:Any]=[:],completion:@escaping([String:Any])->Void){call(op,fields,quiet:true,completion:completion)}
     func handle(_ m:Wire.Message){

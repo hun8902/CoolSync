@@ -16,6 +16,8 @@ struct PhotosPane:View {
         HStack(spacing:0){
             if photos.sidebarShown{sidebar.frame(width:215).background(.ultraThinMaterial);Divider()}
             VStack(spacing:0){toolbar;Divider();
+                if !photos.pendingDeletes.isEmpty{HStack(spacing:10){Image(systemName:photos.pendingDeletes.contains(where:{$0.error != nil}) ? "exclamationmark.triangle":"clock");Text("휴대폰 삭제 확인 대기 \(photos.pendingDeletes.count)개");Spacer();Button("상태·실패 이유 보기"){photos.showPendingDeletes=true}}.font(.caption).padding(10).background(.bar)}
+
                 if photos.dateWorkActive{HStack{ProgressView(value:photos.dateWorkProgress).frame(width:140);Text(photos.status).font(.caption);Spacer();Button("중단"){photos.stopDateWork()}}.padding(10)}
                 if !photos.dateWorkActive && !photos.dateWorkFailures.isEmpty{HStack{Text("수정일 정리 실패 \(photos.dateWorkFailures.count)개");Menu("실패 내역"){ForEach(photos.dateWorkFailures,id:\.self){Text($0)}};Button("실패 항목 재시도…"){photos.retryDateWork()}}.font(.caption).padding(8)}
 HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1:0).allowsHitTesting(photos.preview==nil).accessibilityHidden(photos.preview != nil);if photos.items.isEmpty && !photos.loading && photos.preview==nil{VStack(spacing:12){Image(systemName:"photo.on.rectangle").font(.system(size:35,weight:.light)).foregroundStyle(.tertiary);Text(photos.connected?()==true ? "사진이나 영상이 없습니다":"휴대폰을 연결하세요").foregroundStyle(.secondary);Button("새로 고침"){photos.reload()}}};if let item=photos.preview{viewer(item)}};if photos.infoShown{Divider();inspector.frame(width:275)}};Divider();footer}

@@ -70,13 +70,13 @@ object GallerySync {
   val operation=q.getString("operation");UUID.fromString(operation)
   val receipts=c.getSharedPreferences("gallery-trash-receipts",0)
   val expected=q.getJSONObject("item");val path=expected.getString("path");val fs=StorageBridge.engine(c)
-  if(receipts.contains(operation)){out.put("alreadyApplied",true).put("path",path);if(rescan)GalleryMedia.rescan(c,listOf(path));return}
+  if(receipts.contains(operation)){if(fs.resolve(path,false).exists())throw StorageFault("conflict","삭제했던 경로에 파일이 다시 있습니다. 삭제 대기를 취소하고 최신 사진을 선택하세요");out.put("alreadyApplied",true).put("path",path);if(rescan)GalleryMedia.rescan(c,listOf(path));return}
   val current=known?.get(expected.getString("id")) ?: if(known==null)GalleryMedia.syncRows(c).firstOrNull{it.getString("id")==expected.getString("id")}else null
   if(current==null&&!fs.resolve(path,false).exists()){out.put("alreadyApplied",true).put("path",path);if(rescan)GalleryMedia.rescan(c,listOf(path));return}
-  if(current==null||listOf("path","size","modified","generation").any{current.optString(it)!=expected.optString(it)})throw StorageFault("conflict","휴대폰에서 변경된 사진입니다. 삭제 대기를 취소하고 최신 사진을 다시 선택하세요")
+  if(current==null||listOf("path","size","modified").any{current.optString(it)!=expected.optString(it)})throw StorageFault("conflict","휴대폰에서 변경된 사진입니다. 삭제 대기를 취소하고 최신 사진을 다시 선택하세요")
   val file=fs.resolve(path)
   if(file.length()!=expected.getLong("size")||file.lastModified()/1000!=expected.getLong("modified")/1000)throw StorageFault("conflict","사진 파일이 변경되어 삭제하지 않았습니다")
-  fs.discard(listOf(path));val editor=receipts.edit();if(receipts.all.size>2000)editor.clear();editor.putBoolean(operation,true).commit()
+  fs.discard(listOf(path));if(fs.resolve(path,false).exists())throw StorageFault("write","휴대폰 원본이 남아 있어 삭제 완료로 처리하지 않았습니다");val editor=receipts.edit();if(receipts.all.size>2000)editor.clear();editor.putBoolean(operation,true).commit()
   out.put("path",path);if(rescan)GalleryMedia.rescan(c,listOf(path))
  }
 }

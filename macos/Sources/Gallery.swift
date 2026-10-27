@@ -154,7 +154,7 @@ final class PhotosModel:ObservableObject {
     func disappear(){visible=false;closePreview();thumbnails.close(closeRemote:!caching)}
     func choose(_ scope:String="all",album:String=""){self.scope=scope;self.album=album;selection=[];search="";closePreview();applyView()}
     private func applyView(preservePreview:Bool=false){
-        let pending=Set(pendingDeletes.map{$0.item.cacheIdentity})
+        let pending=Set(pendingDeletes.filter{$0.phoneDeleted}.map{$0.item.cacheIdentity})
         var rows=(disk?.catalog.items ?? []).filter{!pending.contains($0.cacheIdentity) && (album.isEmpty || $0.album==album) && (scope != "videos" || $0.video) && (scope != "favorites" || $0.favorite) && (scope != "screenshots" || $0.album.localizedCaseInsensitiveContains("screenshot"))}
         rows.sort{a,b in
             let left=orderTime(a),right=orderTime(b)
@@ -277,9 +277,9 @@ final class PhotosModel:ObservableObject {
             requests.append(request);chosen.append(value)
         }
         guard !chosen.isEmpty else{error="삭제 요청이 너무 큽니다. 항목을 다시 선택하세요.";return}
-        deletingIDs=Set(chosen.map{$0.id});status="양쪽 삭제 중 · \(chosen.count)개"
+        deletingIDs=Set(chosen.map{$0.id});let deleteToken=deletingIDs;status="양쪽 삭제 중 · \(chosen.count)개"
         rpc?.callPhoto("mediaTrashChecked",["items":requests]){[weak self]r in
-            guard let self,self.disk===disk,!self.deletingIDs.isEmpty else{return};self.deletingIDs=[]
+            guard let self,self.disk===disk,self.deletingIDs==deleteToken else{return};self.deletingIDs=[]
             var queue=self.pendingDeletes
             let results=r["results"]as?[[String:Any]] ?? []
             for request in chosen{
@@ -287,7 +287,7 @@ final class PhotosModel:ObservableObject {
                 if let result=results.first(where:{$0["operation"]as?String==request.id}),result["ok"]as?Bool==true{queue[i].phoneDeleted=true;queue[i].error=nil}
                 else{queue[i].error=results.first(where:{$0["operation"]as?String==request.id})?["error"]as?String ?? r["error"]as?String ?? "휴대폰 처리 확인이 없습니다. 다시 시도하세요."}
             }
-            do{try disk.setPending(queue);self.pendingDeletes=queue;self.finishLocalDeletes()}catch{self.error="삭제 처리 상태를 Mac에 저장하지 못했습니다. 재연결 시 다시 확인합니다."}
+            do{try disk.setPending(queue);self.pendingDeletes=queue;if queue.contains(where:{$0.error != nil}){self.showPendingDeletes=true};self.finishLocalDeletes()}catch{self.error="삭제 처리 상태를 Mac에 저장하지 못했습니다. 재연결 시 다시 확인합니다."}
         }
     }
     private func finishLocalDeletes(){

@@ -58,7 +58,7 @@ object GalleryMedia {
  fun rescan(c:Context,paths:List<String>){
   invalidate();val root=Environment.getExternalStorageDirectory();val valid=paths.distinct().take(20000).map{File(root,it).path};if(valid.isEmpty())return
   prefs(c).edit().putString("syncChange",java.util.UUID.randomUUID().toString()).commit()
-  val latch=CountDownLatch(valid.size);MediaScannerConnection.scanFile(c,valid.toTypedArray(),null){_,_->latch.countDown()};latch.await(20,TimeUnit.SECONDS);invalidate()
+  val latch=CountDownLatch(valid.size);MediaScannerConnection.scanFile(c,valid.toTypedArray(),null){_,_->latch.countDown()};latch.await(20,TimeUnit.SECONDS);c.contentResolver.notifyChange(MediaStore.Files.getContentUri("external"),null);invalidate()
  }
  fun handle(c:Context,q:JSONObject,out:JSONObject){
   when(q.getString("op")){
