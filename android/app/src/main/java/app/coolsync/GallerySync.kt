@@ -23,8 +23,8 @@ object GallerySync {
   val generation=volumes.joinToString("|"){it+":"+MediaStore.getGeneration(c,it)}
   val prefs=c.getSharedPreferences("gallery",0)
   val stamp=hash(JSONObject().put("schema",3).put("version",version).put("generation",generation).put("local",prefs.getString("syncChange","")).put("favorites",JSONArray((prefs.getStringSet("favorites",emptySet()) ?: emptySet()).sorted())).put("albums",JSONArray((prefs.getStringSet("albums",emptySet()) ?: emptySet()).sorted())).toString())
-  val last=read(File(dir,"latest.json"))
-  if(last?.optString("stamp")==stamp){val token=last.optString("revision");if(token.matches(Regex("[a-f0-9]{64}")))read(File(dir,"$token.json"))?.let{return token to it}}
+  // A deleted row need not change the remaining rows' maximum generation.
+  // Rebuild once per requested snapshot, including reconnect after the service was stopped.
   val rows=JSONArray(GalleryMedia.syncRows(c).sortedBy{it.getString("id")})
   val albumResult=JSONObject();GalleryMedia.handle(c,JSONObject().put("op","mediaAlbums"),albumResult)
   val value=JSONObject().put("version",version).put("items",rows).put("albums",albumResult.getJSONArray("albums"))

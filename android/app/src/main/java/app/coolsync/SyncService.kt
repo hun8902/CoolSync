@@ -19,7 +19,7 @@ class SyncService : Service() {
     private val prefs by lazy { getSharedPreferences("sync",0) }
     private var receiverRegistered = false
     private val mediaChanged=Runnable{if(authenticated)sendControl("mediaChanged")}
-    private val mediaObserver=object:android.database.ContentObserver(main){override fun onChange(selfChange:Boolean){main.removeCallbacks(mediaChanged);main.postDelayed(mediaChanged,1200)}}
+    private val mediaObserver=object:android.database.ContentObserver(main){override fun onChange(selfChange:Boolean){getSharedPreferences("gallery",0).edit().putString("syncChange",java.util.UUID.randomUUID().toString()).apply();main.removeCallbacks(mediaChanged);main.postDelayed(mediaChanged,1200)}}
     private var server: BluetoothGattServer? = null
     private var bleGeneration=0
     private var advertiser: BluetoothLeAdvertiser? = null

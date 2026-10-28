@@ -187,10 +187,10 @@ final class PhotosModel:ObservableObject {
     }
     func reconnected(){
         if !pendingDeletes.isEmpty{retryDeletes(automatic:true)}
-        if visible || !pendingDeletes.isEmpty{reload()}
+        reload()
     }
     func changed(){
-        guard visible else{return};changeTask?.cancel()
+        changeTask?.cancel()
         let task=DispatchWorkItem{[weak self]in self?.reload()};changeTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.5,execute:task)
     }
     func reload(){
@@ -220,8 +220,17 @@ final class PhotosModel:ObservableObject {
             if next<total && next>offset{self.status="변경분 \(next)/\(total)개 반영 중…";self.syncPage(offset:next,batch:batch,generation:generation,staged:value,changes:changes+events.count);return}
             value.synced=Date();value.dateSchema=r["dateSchema"]as?Int
             do{
-                let old=disk.catalog.items;try disk.commit(value)
-                for item in old{if let current=rows[item.id],current.cacheIdentity==item.cacheIdentity{continue};try disk.discard(item,trashOriginal:rows[item.id]==nil)}
+                let old=disk.catalog.items
+                let obsolete=old.filter{rows[$0.id]?.cacheIdentity != $0.cacheIdentity}
+                if !obsolete.isEmpty{
+                    let identities=Set(obsolete.map{$0.cacheIdentity})
+                    if let preview=self.preview,identities.contains(preview.cacheIdentity){self.closePreview()}
+                    if self.caching{self.cancelCache()}
+                    self.thumbnails.close(closeRemote:false);self.thumbnails.clear()
+                }
+                // Keep the old revision until cleanup succeeds so reconnect can retry it.
+                for item in obsolete{try disk.discard(item,trashOriginal:rows[item.id]==nil)}
+                try disk.commit(value)
                 self.loading=false;self.applyView();self.status += value.dateSchema==3 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 원본 촬영일을 표시할 수 있습니다";self.refreshCacheUsage()
                 if self.infoShown{self.loadInfo()};self.processPendingDeletes()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}
