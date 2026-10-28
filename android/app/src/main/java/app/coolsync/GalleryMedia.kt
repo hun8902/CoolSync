@@ -22,6 +22,10 @@ object GalleryMedia {
  data class Item(val id:Long,val path:String,val name:String,val album:String,val mime:String,val size:Long,val date:Long,val modified:Long,val width:Int,val height:Int,val duration:Long,val generation:Long,val added:Long,val dateSource:String){
   fun json(favorites:Set<String>)=JSONObject().put("id",id.toString()).put("path",path).put("name",name).put("album",album).put("mime",mime).put("size",size).put("date",date).put("modified",modified).put("width",width).put("height",height).put("duration",duration).put("favorite",path in favorites).put("generation",generation).put("added",added).put("dateSource",dateSource)
  }
+ private fun filenameDate(name:String):Long{
+  if(!Regex("^[0-9]{8}_[0-9]{6}(?:\\([0-9]+\\))?\\.[^.]+$").matches(name))return 0L
+  return runCatching{java.time.LocalDateTime.parse(name.take(15).replace("_",""),java.time.format.DateTimeFormatter.ofPattern("uuuuMMddHHmmss").withResolverStyle(java.time.format.ResolverStyle.STRICT)).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()}.getOrDefault(0L)
+ }
  private var cached:List<Item>?=null
  private var cachedAt=0L
  private fun prefs(c:Context)=c.getSharedPreferences("gallery",0)
@@ -43,10 +47,11 @@ object GalleryMedia {
     val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
     val taken=long(6)
     val added=long(11)*1000;val modified=(file.lastModified()/1000)*1000
-    // Android MediaStore standard chronology (INFERRED_DATE): DATE_TAKEN, otherwise DATE_MODIFIED.
+    // Use the indexed capture date; for media without it, recognize the explicit timestamp filename.
     // Listing must not consult or overwrite dates using cached EXIF or the import date.
-    val date=if(!cursor.isNull(6))taken else long(5)*1000
-    val source=if(!cursor.isNull(6))"captured" else if(long(5)>0)"modified" else "unknown"
+    val namedDate=if(taken<=0)filenameDate(str(2))else 0L
+    val date=when{taken>0->taken;namedDate>0->namedDate;else->long(5)*1000}
+    val source=when{taken>0->"captured";namedDate>0->"filename";long(5)>0->"modified";else->"unknown"}
     result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),date,modified,long(7).toInt(),long(8).toInt(),long(9),long(10),added,source))
    }
   }

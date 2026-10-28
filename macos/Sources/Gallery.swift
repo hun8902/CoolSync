@@ -25,6 +25,11 @@ final class PhotoThumbnails {
     var failure:((String)->Void)?
     var disk:PhotoLibraryCache?
     var canFetch:(()->Bool)?
+    var activity:((Int,Int,Int)->Void)?
+    private var completed=0
+    private var failures=0
+    private func publishActivity(){activity?(waiting.count,completed,failures)}
+    func resume(){pump()}
     private var reported=false
     private let cache=NSCache<NSString,NSImage>()
     private var endpoint:[String:Any]?
@@ -37,16 +42,16 @@ final class PhotoThumbnails {
     private var generation=0
     private let session:URLSession={let c=URLSessionConfiguration.ephemeral;c.timeoutIntervalForRequest=15;c.timeoutIntervalForResource=20;c.httpMaximumConnectionsPerHost=2;return URLSession(configuration:c)}()
     init(){cache.countLimit=200;cache.totalCostLimit=48*1024*1024}
-    func close(closeRemote:Bool=true){generation+=1;endpoint=nil;failedHosts=[];queue=[];pending=[];waiting=[:];preparing=false;active=0;reported=false;session.getAllTasks{tasks in tasks.forEach{$0.cancel()}};if closeRemote && rpc?.connected?()==true{rpc?.callPhoto("mediaClose"){_ in}}}
+    func close(closeRemote:Bool=true){generation+=1;endpoint=nil;failedHosts=[];queue=[];pending=[];waiting=[:];preparing=false;active=0;reported=false;completed=0;failures=0;publishActivity();session.getAllTasks{tasks in tasks.forEach{$0.cancel()}};if closeRemote && rpc?.connected?()==true{rpc?.callPhoto("mediaClose"){_ in}}}
     func clear(){cache.removeAllObjects()}
     private func prepare(_ done:@escaping()->Void){if endpoint != nil{done();return};pending.append(done);if preparing{return};preparing=true;let epoch=generation
-        rpc?.callPhoto("mediaSession"){[weak self]r in guard let self,self.generation==epoch else{return};self.preparing=false;self.endpoint=r["endpoint"]as?[String:Any];if self.endpoint==nil{self.queue=[];self.report(r["error"]as?String ?? "같은 Wi-Fi와 로컬 네트워크 권한을 확인하세요")};let waiting=self.pending;self.pending=[];for callback in waiting{callback()}}
+        rpc?.callPhoto("mediaSession"){[weak self]r in guard let self,self.generation==epoch else{return};self.preparing=false;self.endpoint=r["endpoint"]as?[String:Any];if self.endpoint==nil{self.report(r["error"]as?String ?? "같은 Wi-Fi와 로컬 네트워크 권한을 확인하세요")};let waiting=self.pending;self.pending=[];for callback in waiting{callback()}}
     }
     func withEndpoint(_ completion:@escaping([String:Any]?)->Void){prepare{[weak self]in completion(self?.endpoint)}}
     func invalidateEndpoint(){endpoint=nil;failedHosts=[]}
-    func load(_ item:PhotoItem,_ done:@escaping(NSImage?)->Void){if let data=disk?.thumbnail(item),let image=NSImage(data:data){done(image);return};guard rpc?.connected?()==true,canFetch?() != false else{done(nil);return};let name=item.cacheIdentity;let id=name as NSString;if let image=cache.object(forKey:id){done(image);return};if waiting[name] != nil{waiting[name]?.append(done);return};waiting[name]=[done];queue.append((item,{[weak self]image in guard let self else{return};let callbacks=self.waiting.removeValue(forKey:name) ?? [];for callback in callbacks{callback(image)}}));pump()}
+    func load(_ item:PhotoItem,_ done:@escaping(NSImage?)->Void){if let data=disk?.thumbnail(item),let image=NSImage(data:data){done(image);return};guard rpc?.connected?()==true else{done(nil);return};let name=item.cacheIdentity;let id=name as NSString;if let image=cache.object(forKey:id){done(image);return};if waiting[name] != nil{waiting[name]?.append(done);return};waiting[name]=[done];queue.append((item,{[weak self]image in guard let self else{return};let callbacks=self.waiting.removeValue(forKey:name) ?? [];self.completed+=1;if image==nil{self.failures+=1};self.publishActivity();for callback in callbacks{callback(image)}}));publishActivity();pump()}
 
-    private func pump(){while active<2 && !queue.isEmpty{let request=queue.removeFirst();active+=1;let epoch=generation;prepare{[weak self]in guard let self else{return};if self.generation != epoch{return};self.fetch(request.0,retry:true,epoch:epoch){image in guard epoch==self.generation else{return};self.active=max(0,self.active-1);request.1(image);self.pump()}}}}
+    private func pump(){guard canFetch?() != false else{return};while active<2 && !queue.isEmpty{let request=queue.removeFirst();active+=1;let epoch=generation;prepare{[weak self]in guard let self else{return};if self.generation != epoch{return};self.fetch(request.0,retry:true,epoch:epoch){image in guard epoch==self.generation else{return};self.active=max(0,self.active-1);request.1(image);self.pump()}}}}
     private func fetch(_ item:PhotoItem,retry:Bool,epoch:Int,completion:@escaping(NSImage?)->Void){
         guard let endpoint,let hosts=endpoint["hosts"]as?[String],let host=hosts.first(where:{Self.local($0) && !failedHosts.contains($0)}),let port=endpoint["port"]as?Int,(1...65535).contains(port),let token=endpoint["token"]as?String,let key=key?(),key.count==32,let url=URL(string:"http://\(host):\(port)/thumbnail")else{completion(nil);return}
         var m=Wire.Message(type:"mediaThumb");m.text=String(data:(try? JSONSerialization.data(withJSONObject:["path":item.path,"token":token])) ?? Data(),encoding:.utf8) ?? ""
@@ -55,7 +60,7 @@ final class PhotoThumbnails {
         session.dataTask(with:q){[weak self]data,response,error in
             var image:NSImage?;var thumbnailData:Data?
             if error==nil,(response as?HTTPURLResponse)?.statusCode==200,let data,data.count<=128128,let box=try? AES.GCM.SealedBox(combined:data),let clear=try? AES.GCM.open(box,using:SymmetricKey(data:key),authenticating:Data("CoolSync/media/1|\(id)".utf8)){image=NSImage(data:clear);thumbnailData=clear}
-            DispatchQueue.main.async{guard let self,self.generation==epoch else{return};if let image{if let thumbnailData{self.disk?.putThumbnail(thumbnailData,item)};self.cache.setObject(image,forKey:item.cacheIdentity as NSString,cost:240*240*4);completion(image)}else if hosts.contains(where:{Self.local($0) && $0 != host && !self.failedHosts.contains($0)}){self.failedHosts.insert(host);self.fetch(item,retry:retry,epoch:epoch,completion:completion)}else if retry{self.endpoint=nil;self.failedHosts=[];self.prepare{self.fetch(item,retry:false,epoch:epoch,completion:completion)}}else{self.queue=[];self.report("썸네일을 가져오지 못했습니다. 같은 Wi-Fi에 연결하고 두 기기의 로컬 네트워크 접근을 허용하세요.");completion(nil)}}
+            DispatchQueue.main.async{guard let self,self.generation==epoch else{return};if let image{if let thumbnailData{self.disk?.putThumbnail(thumbnailData,item)};self.cache.setObject(image,forKey:item.cacheIdentity as NSString,cost:240*240*4);completion(image)}else if hosts.contains(where:{Self.local($0) && $0 != host && !self.failedHosts.contains($0)}){self.failedHosts.insert(host);self.fetch(item,retry:retry,epoch:epoch,completion:completion)}else if retry{self.endpoint=nil;self.failedHosts=[];self.prepare{self.fetch(item,retry:false,epoch:epoch,completion:completion)}}else{self.report("썸네일을 가져오지 못했습니다. 같은 Wi-Fi에 연결하고 두 기기의 로컬 네트워크 접근을 허용하세요.");completion(nil)}}
         }.resume()
     }
     private func report(_ message:String){if !reported{reported=true;failure?(message)}}
@@ -78,7 +83,10 @@ final class PhotosModel:ObservableObject {
     @Published var longitude:Double?
     @Published var region=MKCoordinateRegion(center:CLLocationCoordinate2D(latitude:37,longitude:127),span:MKCoordinateSpan(latitudeDelta:0.02,longitudeDelta:0.02))
     @Published var status="휴대폰에 연결하세요"
-    @Published var loading=false
+    @Published var thumbnailPending=0
+    @Published var thumbnailCompleted=0
+    @Published var thumbnailFailures=0
+    @Published var loading=false{didSet{if !loading{thumbnails.resume()}}}
     @Published var total=0
     @Published var revision=0
     @Published var error:String?
@@ -188,9 +196,13 @@ final class PhotosModel:ObservableObject {
     var title:String{if !album.isEmpty{return albums.first{$0.path==album}?.name ?? album};return ["all":"보관함","videos":"비디오","favorites":"즐겨찾기","recent":"최근 저장된 항목","screenshots":"스크린샷"][scope] ?? "보관함"}
     var filtered:[PhotoItem]{items.filter{search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)}}
     var selected:[PhotoItem]{items.filter{selection.contains($0.path)}}
-    func orderTime(_ item:PhotoItem)->Int64{scope=="recent" || sortKey=="added" ? (item.added.flatMap{$0>0 ? $0:nil} ?? 0):item.date}
+    func timelineTime(_ item:PhotoItem)->Int64{
+        if item.date>0 && ["exif","video","captured"].contains(item.dateSource ?? ""){return item.date}
+        return PhotoOrdering.filenameDate(item.name) ?? item.date
+    }
+    func orderTime(_ item:PhotoItem)->Int64{scope=="recent" || sortKey=="added" ? (item.added.flatMap{$0>0 ? $0:nil} ?? 0):timelineTime(item)}
     func orderDate(_ item:PhotoItem)->Date{Date(timeIntervalSince1970:Double(orderTime(item))/1000)}
-    func dateSourceTitle(_ item:PhotoItem)->String{["exif":"원본 촬영일 (EXIF)","video":"영상 내부 촬영일","captured":"기기 제공 촬영일","added":"추가일 · 원본 촬영일 없음","modified":"수정일 · 원본 촬영일 없음","unknown":"날짜 없음"][item.dateSource ?? ""] ?? "기존 목록 날짜"}
+    func dateSourceTitle(_ item:PhotoItem)->String{if timelineTime(item) != item.date || item.dateSource=="filename"{return "파일명 날짜"};return ["exif":"원본 촬영일 (EXIF)","video":"영상 내부 촬영일","captured":"기기 제공 촬영일","added":"추가일 · 원본 촬영일 없음","modified":"수정일 · 원본 촬영일 없음","unknown":"날짜 없음"][item.dateSource ?? ""] ?? "기존 목록 날짜"}
     var sections:[PhotoSection]{
         let rows=filtered;guard grouping != "all" && sortKey != "name"else{return[PhotoSection(title:"",items:rows)]}
         let formatter=DateFormatter();formatter.dateFormat=grouping=="year" ? "yyyy년":grouping=="day" ? "yyyy년 M월 d일":"yyyy년 M월"
@@ -204,11 +216,12 @@ final class PhotosModel:ObservableObject {
         editedRefreshToken=UUID();editedRefreshActive=false;editedRefreshFailures=[]
         dateRetry=[];dateWorkRemaining=[];dateWorkToken=UUID();dateWorkFailures=[];dateWorkNotes=[];dateWorkActive=false;dateWorkStopped=true
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();originals.cancelAll();thumbnails.close();thumbnails.clear();closePreview()
-        disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true }
+        disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true };thumbnails.activity={ [weak self] pending,completed,failures in self?.thumbnailPending=pending;self?.thumbnailCompleted=completed;self?.thumbnailFailures=failures }
         originals.thumbnails=thumbnails;originals.cacheTarget={ [weak self] item in self?.disk?.originalURL(item) };originals.key={ [weak self] in self?.thumbnails.key?() ?? Data() };originals.progress={ [weak self] owner,value in guard let self else{return};self.originalProgress=value;if owner=="preview"{self.previewPhase="원본을 가져오는 중 · \(Int(value*100))%"}}
         pendingDeletes=disk?.pending ?? [];deleteCompleted=0;deleteActivity="";photoSyncActivity="";loading=false;caching=false;deletingIDs=[]
         albums=disk?.catalog.albums ?? [];applyView();refreshCacheUsage()
     }
+    func retryThumbnails(){thumbnails.close(closeRemote:false);thumbnails.clear();applyView()}
     func appear(){visible=true;applyView();reload()}
     func disappear(){visible=false;closePreview();thumbnails.close(closeRemote:!caching)}
     func choose(_ scope:String="all",album:String=""){self.scope=scope;self.album=album;selection=[];search="";closePreview();applyView()}
@@ -246,12 +259,12 @@ final class PhotosModel:ObservableObject {
     func reload(){
         guard connected?()==true,let disk else{applyView();return}
         if loading || !deletingIDs.isEmpty{refreshQueued=true;return}
-        pageGeneration=UUID();let generation=pageGeneration;loading=true;error=nil;status=disk.catalog.dateSchema==5 ? "변경된 사진 확인 중…":"휴대폰 사진 날짜 갱신 중…"
+        pageGeneration=UUID();let generation=pageGeneration;loading=true;error=nil;status=disk.catalog.dateSchema==6 ? "변경된 사진 확인 중…":"휴대폰 사진 날짜 갱신 중…"
         syncPage(offset:0,batch:"",generation:generation,staged:disk.catalog,changes:0)
     }
     private func syncPage(offset:Int,batch:String,generation:UUID,staged:PhotoCatalog,changes:Int){
         guard let disk else{return}
-        rpc?.callPhoto("mediaSync",["since":disk.catalog.dateSchema==5 ? disk.catalog.revision:"","batch":batch,"offset":offset]){[weak self]r in
+        rpc?.callPhoto("mediaSync",["since":disk.catalog.dateSchema==6 ? disk.catalog.revision:"","batch":batch,"offset":offset]){[weak self]r in
             guard let self,self.pageGeneration==generation,self.disk===disk else{return}
             guard r["ok"]as?Bool==true,let events=r["events"]as?[[String:Any]],let token=r["revision"]as?String,let batch=r["batch"]as?String else{self.loading=false;self.applyView();self.status=r["error"]as?String ?? "변경분을 갱신하지 못했습니다. 저장된 목록을 유지합니다.";return}
             var value=staged
@@ -314,7 +327,7 @@ final class PhotosModel:ObservableObject {
                     if edits>0{messages.append("사진 편집·정보 변경 \(edits)개")}
                     if !messages.isEmpty{self.photoSyncActivity=messages.joined(separator:" · ")+" · Mac 자동 반영 완료"}
                 }
-                self.loading=false;self.applyView();self.status += value.dateSchema==5 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 사진 날짜 정렬이 적용됩니다";self.refreshCacheUsage()
+                self.loading=false;self.applyView();self.status += value.dateSchema==6 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 사진 날짜 정렬이 적용됩니다";self.refreshCacheUsage()
                 if let reopen{self.open(reopen)}
                 if self.infoShown{self.loadInfo()};self.processPendingDeletes();self.refreshEditedOriginals();self.processBulkInfo()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}

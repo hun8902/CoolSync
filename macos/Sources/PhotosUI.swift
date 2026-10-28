@@ -16,6 +16,14 @@ struct PhotosPane:View {
         HStack(spacing:0){
             if photos.sidebarShown{sidebar.frame(width:215).background(.ultraThinMaterial);Divider()}
             VStack(spacing:0){toolbar;Divider();
+                if photos.loading || photos.thumbnailPending>0 || photos.thumbnailFailures>0{
+                    HStack(spacing:10){
+                        if photos.loading || photos.thumbnailPending>0{ProgressView().controlSize(.small)}else{Image(systemName:"exclamationmark.triangle")}
+                        Text(photos.loading ? "사진 목록 동기화 중 · 저장된 목록을 표시하고 있습니다":photos.thumbnailPending>0 ? "썸네일 불러오는 중 · 완료 \(photos.thumbnailCompleted)개 · 대기 \(photos.thumbnailPending)개":"썸네일 불러오기 실패 \(photos.thumbnailFailures)개 · 사진 삭제를 의미하지 않습니다").lineLimit(2)
+                        Spacer()
+                        if photos.thumbnailFailures>0{Button("썸네일 다시 받기"){photos.retryThumbnails()}.disabled(photos.loading || photos.thumbnailPending>0)}
+                    }.font(.caption).padding(10).background(.bar)
+                }
                 if !photos.bulkInfoStatus.isEmpty{HStack{if photos.bulkInfoActive{ProgressView(value:Double(photos.bulkInfoDone),total:Double(max(1,photos.bulkInfoTotal))).frame(width:100)};Text(photos.bulkInfoStatus).lineLimit(1);Spacer();if photos.bulkInfoActive{Button("중단"){photos.stopBulkInfo()}};if !photos.bulkInfoFailures.isEmpty{Menu("실패 내역"){ForEach(Array(photos.bulkInfoFailures.enumerated()),id:\.offset){Text($0.element)}};Button("실패 항목 재조회"){photos.retryBulkInfo()}.disabled(photos.bulkInfoActive)}}.font(.caption).padding(10).background(.bar)}
                 if !photos.photoSyncActivity.isEmpty{HStack{Image(systemName:"arrow.triangle.2.circlepath");Text(photos.photoSyncActivity);Spacer()}.font(.caption).padding(10).background(.bar)}
                 if !photos.pendingDeletes.isEmpty || !photos.deleteActivity.isEmpty{HStack(spacing:10){if photos.deleteInFlight{ProgressView().controlSize(.small)}else{Image(systemName:photos.pendingDeletes.isEmpty ? "checkmark.circle.fill":"clock")};Text(photos.deleteActivity.isEmpty ? "연결되면 삭제 대기를 자동 처리합니다":photos.deleteActivity);Spacer();Button("삭제 상태"){photos.showPendingDeletes=true}}.font(.caption).padding(10).background(.bar)}
@@ -81,7 +89,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
     }
     private var sortCommands:some View{
         Group{
-            Picker("정렬 기준",selection:$photos.sortKey){Text("파일명").tag("name");Text("촬영일 · 없으면 추가일").tag("captured");Text("추가일").tag("added")}
+            Picker("정렬 기준",selection:$photos.sortKey){Text("파일명").tag("name");Text("촬영일 · 파일명 날짜").tag("captured");Text("추가일").tag("added")}
             Picker("정렬 방향",selection:$photos.ascending){Text(photos.sortKey=="name" ? "내림차순":"최신순").tag(false);Text(photos.sortKey=="name" ? "오름차순":"오래된순").tag(true)}
             Divider();Button("캐시된 사진 촬영정보 전체 다시 불러오기"){photos.refreshAllCachedInfo()}.disabled(photos.bulkInfoActive)
             Menu("원본 촬영일로 파일 수정일 맞추기"){
@@ -115,7 +123,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
             Text("정보").font(.system(size:17,weight:.semibold))
             if let item=photos.selected.first,photos.selected.count==1{
                 Text(item.name).font(.system(size:13,weight:.semibold)).textSelection(.enabled)
-                Text(photos.info["captured"] ?? (item.date>0 ? item.timestamp.formatted():"날짜 없음")).font(.system(size:12)).foregroundStyle(.secondary);Text(photos.info["captured"] == nil ? photos.dateSourceTitle(item):(photos.info["captureSource"]=="media-store" ? "휴대폰 갤러리 촬영일":"원본 촬영정보")).font(.caption).foregroundStyle(.secondary);if let added=item.added,added>0{Text("추가일 · "+Date(timeIntervalSince1970:Double(added)/1000).formatted()).font(.caption).foregroundStyle(.secondary)}
+                Text(photos.info["captured"] ?? (photos.timelineTime(item)>0 ? Date(timeIntervalSince1970:Double(photos.timelineTime(item))/1000).formatted():"날짜 없음")).font(.system(size:12)).foregroundStyle(.secondary);Text(photos.info["captured"] == nil ? photos.dateSourceTitle(item):(photos.info["captureSource"]=="media-store" ? "휴대폰 갤러리 촬영일":"원본 촬영정보")).font(.caption).foregroundStyle(.secondary);if let added=item.added,added>0{Text("추가일 · "+Date(timeIntervalSince1970:Double(added)/1000).formatted()).font(.caption).foregroundStyle(.secondary)}
                 HStack{Text("\(item.width) × \(item.height)");Spacer();Text(ByteCountFormatter.string(fromByteCount:item.size,countStyle:.file))}.font(.system(size:11)).foregroundStyle(.secondary)
                 Divider()
                 Text(photos.infoStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)

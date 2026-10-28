@@ -22,7 +22,7 @@ object GallerySync {
   val version=volumes.joinToString("|"){it+":"+MediaStore.getVersion(c,it)}
   val generation=volumes.joinToString("|"){it+":"+MediaStore.getGeneration(c,it)}
   val prefs=c.getSharedPreferences("gallery",0)
-  val stamp=hash(JSONObject().put("schema",5).put("version",version).put("generation",generation).put("local",prefs.getString("syncChange","")).put("favorites",JSONArray((prefs.getStringSet("favorites",emptySet()) ?: emptySet()).sorted())).put("albums",JSONArray((prefs.getStringSet("albums",emptySet()) ?: emptySet()).sorted())).toString())
+  val stamp=hash(JSONObject().put("schema",6).put("version",version).put("generation",generation).put("local",prefs.getString("syncChange","")).put("favorites",JSONArray((prefs.getStringSet("favorites",emptySet()) ?: emptySet()).sorted())).put("albums",JSONArray((prefs.getStringSet("albums",emptySet()) ?: emptySet()).sorted())).toString())
   // A deleted row need not change the remaining rows' maximum generation.
   // Rebuild once per requested snapshot, including reconnect after the service was stopped.
   val rows=JSONArray(GalleryMedia.syncRows(c).sortedBy{it.getString("id")})
@@ -51,7 +51,7 @@ object GallerySync {
   }
   val start=q.optInt("offset").coerceIn(0,batch.events.size);val rows=JSONArray();var next=start;var size=0
   for(event in batch.events.drop(start).take(40)){val bytes=event.toString().toByteArray().size;if(rows.length()>0&&size+bytes>20000)break;rows.put(event);size+=bytes;next++}
-  out.put("dateSchema",5).put("batch",batchID).put("revision",batch.revision).put("reset",batch.reset).put("events",rows).put("next",next).put("total",batch.events.size)
+  out.put("dateSchema",6).put("batch",batchID).put("revision",batch.revision).put("reset",batch.reset).put("events",rows).put("next",next).put("total",batch.events.size)
  }
  @Synchronized fun trash(c:Context,q:JSONObject,out:JSONObject,rescan:Boolean=true,known:Map<String,JSONObject>?=null){
   if(q.has("items")){
