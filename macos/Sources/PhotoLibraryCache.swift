@@ -21,6 +21,7 @@ final class PhotoLibraryCache {
     let folder:URL
     private(set) var catalog=PhotoCatalog()
     private(set) var pending:[PendingPhotoDelete]=[]
+    private(set) var refreshPaths=Set<String>()
     private let fm=FileManager.default
     var protected=Set<URL>()
     private var thumbnailWrites=0
@@ -32,11 +33,13 @@ final class PhotoLibraryCache {
         var url=folder;var values=URLResourceValues();values.isExcludedFromBackup=true;try? url.setResourceValues(values)
         if let data=try?Data(contentsOf:folder.appendingPathComponent("catalog.json")){catalog=(try?JSONDecoder().decode(PhotoCatalog.self,from:data)) ?? PhotoCatalog()}
         if let data=try?Data(contentsOf:folder.appendingPathComponent("pending-deletes.json")){pending=(try?JSONDecoder().decode([PendingPhotoDelete].self,from:data)) ?? []}
+        if let data=try?Data(contentsOf:folder.appendingPathComponent("refresh-originals.json")){refreshPaths=(try?JSONDecoder().decode(Set<String>.self,from:data)) ?? []}
     }
     private func save<T:Encodable>(_ value:T,_ name:String)throws{
         let target=folder.appendingPathComponent(name);try JSONEncoder().encode(value).write(to:target,options:.atomic);try fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:target.path)
     }
     func commit(_ value:PhotoCatalog)throws{try save(value,"catalog.json");catalog=value}
+    func setRefreshPaths(_ paths:Set<String>)throws{try save(paths,"refresh-originals.json");refreshPaths=paths}
     func setPending(_ values:[PendingPhotoDelete])throws{try save(values,"pending-deletes.json");pending=values}
     private func digest(_ item:PhotoItem)->String{SHA256.hash(data:Data("\(item.id)|\(item.path)|\(item.modified)|\(item.size)|\(item.generation ?? 0)".utf8)).map{String(format:"%02x",$0)}.joined()}
     func thumbnailURL(_ item:PhotoItem)->URL{folder.appendingPathComponent("thumbnails/"+digest(item)+".jpg")}

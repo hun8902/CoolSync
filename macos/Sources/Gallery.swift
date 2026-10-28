@@ -122,6 +122,30 @@ final class PhotosModel:ObservableObject {
     private var deletingIDs=Set<String>()
     private var deleteRequestToken=UUID()
     private var refreshQueued=false
+    private var editedRefreshActive=false
+    private var editedRefreshToken=UUID()
+    private var editedRefreshFailures=Set<String>()
+    private func refreshEditedOriginals(){
+        guard !loading,!editedRefreshActive,connected?()==true,let disk else{return}
+        let candidates=disk.catalog.items.filter{disk.refreshPaths.contains($0.path) && !editedRefreshFailures.contains($0.path)}
+        guard let item=candidates.first else{return}
+        if previewLoading && preview?.id==item.id{return}
+        if disk.original(item,touch:false) != nil{do{try disk.setRefreshPaths(disk.refreshPaths.subtracting([item.path]));refreshEditedOriginals()}catch{self.error=error.localizedDescription};return}
+        guard item.size<=disk.budget else{editedRefreshFailures.insert(item.path);photoSyncActivity="편집 사진이 캐시 한도를 초과합니다 · \(item.name)";refreshEditedOriginals();return}
+        editedRefreshActive=true;let token=editedRefreshToken;let target=disk.originalURL(item);disk.protected.insert(target)
+        photoSyncActivity="편집된 원본 캐시 갱신 중 · \(item.name)"
+        originals.download(item,to:target,owner:"edited-refresh"){[weak self]result in
+            guard let self,self.disk===disk,self.editedRefreshToken==token else{return}
+            self.editedRefreshActive=false;disk.protected.remove(target)
+            switch result{
+            case .success(let receipt):
+                do{try self.rememberOriginal(receipt.item);try disk.setRefreshPaths(disk.refreshPaths.subtracting([item.path]));disk.prune(excluding:[receipt.url]);self.photoSyncActivity="편집 사진·원본 캐시 최신 버전 반영 완료"}catch{self.editedRefreshFailures.insert(item.path);self.photoSyncActivity="캐시 갱신 기록 실패 · 다음 연결 때 재시도"}
+            case .failure:
+                self.editedRefreshFailures.insert(item.path);self.photoSyncActivity="편집 원본 캐시 갱신 대기 · 다음 연결 때 자동 재시도"
+            }
+            self.refreshCacheUsage();self.refreshEditedOriginals()
+        }
+    }
     private var cacheGeneration=UUID()
     private var changeTask:DispatchWorkItem?
     weak var rpc:ExplorerModel?
@@ -161,6 +185,7 @@ final class PhotosModel:ObservableObject {
         return result
     }
     func configure(identity:Data){
+        editedRefreshToken=UUID();editedRefreshActive=false;editedRefreshFailures=[]
         dateRetry=[];dateWorkRemaining=[];dateWorkToken=UUID();dateWorkFailures=[];dateWorkActive=false;dateWorkStopped=true
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();originals.cancelAll();thumbnails.close();thumbnails.clear();closePreview()
         disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true }
@@ -187,6 +212,7 @@ final class PhotosModel:ObservableObject {
         if !pendingDeletes.isEmpty{status += " · 삭제 대기 \(pendingDeletes.count)개"}
     }
     func reconnected(){
+        editedRefreshFailures=[]
         if !pendingDeletes.isEmpty{retryDeletes(automatic:true)}
         reload()
     }
@@ -238,7 +264,13 @@ final class PhotosModel:ObservableObject {
                     else{nextAlbum=""}
                 }
                 let obsolete=old.filter{rows[$0.id]?.cacheIdentity != $0.cacheIdentity}
+                let byPath=Dictionary(value.items.map{($0.path,$0)},uniquingKeysWith:{_,last in last})
+                let reopen=self.preview.flatMap{item -> PhotoItem? in guard obsolete.contains(where:{$0.id==item.id})else{return nil};return rows[item.id] ?? byPath[item.path]}
+                var refreshPaths=disk.refreshPaths.intersection(Set(value.items.map{$0.path}))
+                for item in obsolete where disk.original(item,touch:false) != nil{if let current=rows[item.id] ?? byPath[item.path]{refreshPaths.insert(current.path)}}
+                try disk.setRefreshPaths(refreshPaths)
                 if !obsolete.isEmpty{
+                    self.editedRefreshToken=UUID();self.editedRefreshActive=false;self.originals.cancel(owner:"edited-refresh")
                     let identities=Set(obsolete.map{$0.cacheIdentity})
                     if let preview=self.preview,identities.contains(preview.cacheIdentity){self.closePreview()}
                     if self.caching{self.cancelCache()}
@@ -255,10 +287,13 @@ final class PhotosModel:ObservableObject {
                     if additions>0{messages.append("사진 추가·복원 \(additions)개")}
                     if relocated>0{messages.append("사진 이동·경로 변경 \(relocated)개")}
                     if albumChanges>0{messages.append("앨범 목록 갱신")}
+                    let edits=obsolete.filter{rows[$0.id] != nil && rows[$0.id]?.path==$0.path}.count
+                    if edits>0{messages.append("사진 편집·정보 변경 \(edits)개")}
                     if !messages.isEmpty{self.photoSyncActivity=messages.joined(separator:" · ")+" · Mac 자동 반영 완료"}
                 }
                 self.loading=false;self.applyView();self.status += value.dateSchema==3 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 원본 촬영일을 표시할 수 있습니다";self.refreshCacheUsage()
-                if self.infoShown{self.loadInfo()};self.processPendingDeletes()
+                if let reopen{self.open(reopen)}
+                if self.infoShown{self.loadInfo()};self.processPendingDeletes();self.refreshEditedOriginals()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}
             }catch{self.loading=false;self.error="Mac 캐시 저장 또는 정리를 완료하지 못했습니다: \(error.localizedDescription)";self.applyView()}
         }
@@ -435,7 +470,7 @@ final class PhotosModel:ObservableObject {
             guard let self,self.previewGeneration==generation,self.preview?.path==item.path,self.disk===disk else{return}
             switch result{
             case .failure(let error):self.previewLoading=false;self.previewError=error.localizedDescription
-            case .success(let receipt):do{try self.rememberOriginal(receipt.item);self.preview=receipt.item;disk.touch(receipt.url);disk.protected=[receipt.url];disk.prune(excluding:[receipt.url]);self.refreshCacheUsage();self.show(receipt.item,url:receipt.url)}catch{self.previewLoading=false;self.previewError=error.localizedDescription}
+            case .success(let receipt):do{try self.rememberOriginal(receipt.item);self.preview=receipt.item;disk.touch(receipt.url);disk.protected=[receipt.url];disk.prune(excluding:[receipt.url]);self.refreshCacheUsage();self.show(receipt.item,url:receipt.url);self.refreshEditedOriginals()}catch{self.previewLoading=false;self.previewError=error.localizedDescription}
             }
         }
     }
@@ -485,6 +520,6 @@ final class PhotosModel:ObservableObject {
     }
     func canNavigatePreview(_ delta:Int)->Bool{guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path})else{return false};return filtered.indices.contains(i+delta)}
     func nextPreview(_ delta:Int){guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path}),filtered.indices.contains(i+delta)else{return};open(filtered[i+delta])}
-    func connectionEnded(){deleteRequestToken=UUID();if !pendingDeletes.isEmpty{deleteActivity="연결되면 남은 삭제를 자동 처리합니다"};if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
+    func connectionEnded(){editedRefreshToken=UUID();editedRefreshActive=false;deleteRequestToken=UUID();if !pendingDeletes.isEmpty{deleteActivity="연결되면 남은 삭제를 자동 처리합니다"};if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
     func imported(){changed()}
 }
