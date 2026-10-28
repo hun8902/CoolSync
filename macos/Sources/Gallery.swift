@@ -313,9 +313,9 @@ final class PhotosModel:ObservableObject {
         let catalog=disk?.catalog.items ?? []
         let source: [PhotoItem]
         switch target{case "all":source=catalog;case "album":source=catalog.filter{$0.album==album};case "retry":source=catalog.filter{retryPaths.contains($0.path)};default:source=selected}
-        let values=source.filter{$0.mime.hasPrefix("image/")};guard !values.isEmpty else{error="대상 사진이 없습니다";return}
+        let values=source.filter{$0.mime.hasPrefix("image/") || $0.video};guard !values.isEmpty else{error="대상 사진·동영상이 없습니다";return}
         guard connected?()==true,!caching,!moving,!loading else{error="휴대폰 연결 후 진행 중인 사진 작업을 마치세요";return}
-        let alert=NSAlert();alert.messageText="대상 사진 \(values.count)개의 파일 수정일을 맞출까요?";alert.informativeText="휴대폰 원본 파일에서 EXIF 촬영일을 직접 새로 읽고 \(values.count)개 항목을 처리합니다. Mac 원본 다운로드는 필요하지 않습니다. 휴대폰 파일의 수정일을 바꾸며 원본 내용과 EXIF는 유지합니다. 이전 수정일은 휴대폰 앱에 기록합니다.";alert.addButton(withTitle:"수정일 맞추기");alert.addButton(withTitle:"취소")
+        let alert=NSAlert();alert.messageText="사진·동영상 \(values.count)개의 파일 수정일을 맞출까요?";alert.informativeText="사진은 원본 EXIF 촬영일, 동영상은 원본 내부 촬영일·생성일을 직접 새로 읽고 \(values.count)개 항목을 처리합니다. Mac 원본 다운로드는 필요하지 않습니다. 휴대폰 파일의 수정일을 바꾸며 사진·영상 내용과 내부 메타데이터는 유지합니다. 이전 수정일은 휴대폰 앱에 기록합니다.";alert.addButton(withTitle:"수정일 맞추기");alert.addButton(withTitle:"취소")
         if alert.runModal() == .alertFirstButtonReturn{closePreview();loading=true;dateWorkActive=true;dateWorkToken=UUID();dateWorkStopped=false;dateWorkTotal=values.count;dateWorkProgress=0;dateWorkFailures=[];dateWorkNotes=[];dateRetry=[];alignDateBatch(values,updated:0,skipped:0,failed:0)}
     }
     private func alignDateBatch(_ values:[PhotoItem],updated:Int,skipped:Int,failed:Int){
@@ -323,11 +323,11 @@ final class PhotosModel:ObservableObject {
         dateWorkRemaining=values
         dateWorkProgress=Double(dateWorkTotal-values.count)/Double(max(1,dateWorkTotal))
         if dateWorkStopped{loading=false;dateWorkActive=false;status="수정일 정리 중단 · \(values.count)개 미처리";dateRetry.append(contentsOf:values);return}
-        guard !values.isEmpty else{loading=false;dateWorkActive=false;dateAlignmentResult="변경 \(updated)개 · 건너뜀 \(skipped)개 · 실패 \(failed)개\nEXIF 촬영일이 없거나 이미 같은 수정일인 항목은 건너뜁니다.";reload();return}
+        guard !values.isEmpty else{loading=false;dateWorkActive=false;dateAlignmentResult="변경 \(updated)개 · 건너뜀 \(skipped)개 · 실패 \(failed)개\n원본 촬영일이 없거나 이미 같은 수정일인 항목은 건너뜁니다. 추가일·가져온 날짜로 대체하지 않습니다.";reload();return}
         var selected:[PhotoItem]=[];var rows:[[String:Any]]=[]
         for item in values.prefix(20){let row:[String:Any]=["id":item.id,"path":item.path,"size":item.size,"modified":item.modified,"generation":item.generation ?? 0];if let data=try?JSONSerialization.data(withJSONObject:rows+[row]),data.count<=16000{selected.append(item);rows.append(row)}else{break}}
         guard !selected.isEmpty else{loading=false;dateWorkActive=false;error="선택한 파일 경로가 너무 깁니다";return}
-        status="EXIF 촬영일로 수정일 정리 중 · \(values.count)개 남음"
+        status="원본 촬영일로 사진·동영상 수정일 정리 중 · \(values.count)개 남음"
         let workToken=dateWorkToken
         rpc?.callPhoto("mediaAlignDates",["items":rows]){[weak self]r in
             guard let self,self.disk===disk,self.dateWorkToken==workToken else{return}
