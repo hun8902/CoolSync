@@ -168,9 +168,15 @@ object GalleryMedia {
  }
  private fun paths(q:JSONObject):List<String>{val array=q.getJSONArray("paths");if(array.length()>500)throw StorageFault("size","한 번에 500개 이하를 선택하세요");return(0 until array.length()).map{array.getString(it)}}
  fun thumbnail(c:Context,path:String):ByteArray{
-  val f=file(c,path);val item=items(c).firstOrNull{it.path==path};val uri=item?.let{ContentUris.withAppendedId(if(it.mime.startsWith("video/"))MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI,it.id)}
-  val bitmap=if(uri!=null)runCatching{c.contentResolver.loadThumbnail(uri,Size(240,240),null)}.getOrNull()else null
-  val source=bitmap ?: if(item?.mime?.startsWith("video/")==true)android.media.ThumbnailUtils.createVideoThumbnail(f,Size(240,240),null)else android.media.ThumbnailUtils.createImageThumbnail(f,Size(240,240),null)
+  val f=file(c,path)
+  // A thumbnail request must not rebuild the full library or scan every original's metadata.
+  var uri:Uri?=null;var video=false
+  c.contentResolver.query(MediaStore.Files.getContentUri("external"),arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.Files.FileColumns.MEDIA_TYPE),"_data=? AND is_pending=0 AND is_trashed=0",arrayOf(f.path),null)?.use{cursor->
+   if(cursor.moveToFirst()){video=cursor.getInt(1)==MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO;uri=ContentUris.withAppendedId(if(video)MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI,cursor.getLong(0))}
+  }
+  if(uri==null)video=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase())?.startsWith("video/")==true
+  val bitmap=uri?.let{runCatching{c.contentResolver.loadThumbnail(it,Size(240,240),null)}.getOrNull()}
+  val source=bitmap ?: if(video)android.media.ThumbnailUtils.createVideoThumbnail(f,Size(240,240),null)else android.media.ThumbnailUtils.createImageThumbnail(f,Size(240,240),null)
   try{val bytes=java.io.ByteArrayOutputStream();source.compress(Bitmap.CompressFormat.JPEG,75,bytes);require(bytes.size()<=128000);return bytes.toByteArray()}finally{source.recycle()}
  }
 }
