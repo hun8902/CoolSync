@@ -85,10 +85,20 @@ object GalleryMedia {
     if(item?.mime?.startsWith("video/")==true){
      val retriever=MediaMetadataRetriever();try{retriever.setDataSource(f.path);info.put("duration",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0);info.put("width",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0);info.put("height",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0);info.put("rotation",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));info.put("codec",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE));if(info.optBoolean("locationAllowed")){val loc=retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION);val match=Regex("([+-][0-9.]+)([+-][0-9.]+)").find(loc ?: "");match?.let{info.put("latitude",it.groupValues[1].toDouble()).put("longitude",it.groupValues[2].toDouble())}}}finally{retriever.release()}
     }else runCatching{
-     val exif=ExifInterface(f.path)
+     val exif=if(item!=null && info.optBoolean("locationAllowed")){
+      val uri=ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,item.id)
+      c.contentResolver.openFileDescriptor(MediaStore.setRequireOriginal(uri),"r")?.use{descriptor->info.put("metadataAccess","mediastore-original");ExifInterface(descriptor.fileDescriptor)} ?: throw StorageFault("original","휴대폰 원본 메타데이터를 열지 못했습니다")
+     }else{info.put("metadataAccess","file");ExifInterface(f.path)}
      for((key,tag)in listOf("make" to ExifInterface.TAG_MAKE,"camera" to ExifInterface.TAG_MODEL,"lens" to ExifInterface.TAG_LENS_MODEL,"iso" to ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,"exposure" to ExifInterface.TAG_EXPOSURE_TIME,"aperture" to ExifInterface.TAG_F_NUMBER,"focalLength" to ExifInterface.TAG_FOCAL_LENGTH,"captured" to ExifInterface.TAG_DATETIME_ORIGINAL,"orientation" to ExifInterface.TAG_ORIENTATION))exif.getAttribute(tag)?.let{info.put(key,it)}
      if(info.optBoolean("locationAllowed"))exif.latLong?.let{info.put("latitude",it[0]).put("longitude",it[1])}
     }.onFailure{info.put("metadataError",it.message ?: "원본 EXIF를 읽지 못했습니다")}
+    if(item!=null && !info.has("captured")){
+     val collection=if(item.mime.startsWith("video/"))MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+     val uri=ContentUris.withAppendedId(collection,item.id)
+     runCatching{c.contentResolver.query(uri,arrayOf(MediaStore.Images.ImageColumns.DATE_TAKEN),null,null,null)?.use{cursor->
+      if(cursor.moveToFirst() && !cursor.isNull(0)){val taken=cursor.getLong(0);if(taken>0)info.put("captured",java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",java.util.Locale.getDefault()).format(java.util.Date(taken))).put("captureSource","media-store").put("deviceCaptureTime",taken)}
+     }}.onFailure{info.put("deviceMetadataError",it.message ?: "휴대폰 갤러리 촬영일 조회 실패")}
+    }
     info.put("metadataChecked",true)
     out.put("info",info)
    }
@@ -100,6 +110,14 @@ object GalleryMedia {
    "mediaAlbumTrash"->{val path=q.getString("path");require(path.isNotEmpty());val old=items(c).filter{it.path.startsWith(path+"/")}.map{it.path};StorageBridge.engine(c).discard(listOf(path));val albums=(prefs(c).getStringSet("albums",emptySet()) ?: emptySet()).toMutableSet();albums.remove(path);prefs(c).edit().putStringSet("albums",albums).commit();rescan(c,old)}
    else->throw StorageFault("operation","지원하지 않는 사진 작업입니다")
   }
+ }
+ fun openOriginal(c:Context,path:String,id:String):android.os.ParcelFileDescriptor{
+  file(c,path)
+  val item=items(c).firstOrNull{it.path==path && it.id.toString()==id} ?: throw StorageFault("missing","원본 식별자가 변경되었습니다")
+  val base=if(item.mime.startsWith("video/"))MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+  var uri=ContentUris.withAppendedId(base,item.id)
+  if(c.checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION)==PackageManager.PERMISSION_GRANTED)uri=MediaStore.setRequireOriginal(uri)
+  return c.contentResolver.openFileDescriptor(uri,"r") ?: throw StorageFault("original","휴대폰 원본을 열지 못했습니다")
  }
  fun originalInfo(c:Context,path:String,id:String):JSONObject{
   val file=file(c,path)

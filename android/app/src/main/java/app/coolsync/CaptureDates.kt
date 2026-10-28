@@ -17,13 +17,14 @@ object CaptureDates {
  data class Result(val time:Long,val source:String)
  private var values:JSONObject?=null
  private var dirty=false
+ private val missing=mutableSetOf<String>()
  @Synchronized fun read(c:Context,file:File,mime:String,fresh:Boolean=false):Result {
   if(values==null)values=runCatching{JSONObject(AtomicFile(File(c.filesDir,"capture-dates-v2.json")).readFully().toString(Charsets.UTF_8))}.getOrDefault(JSONObject())
   val key=MessageDigest.getInstance("SHA-256").digest("${file.path}|${file.length()}|${file.lastModified()}".toByteArray()).joinToString(""){"%02x".format(it)}
-  if(!fresh)values!!.optJSONObject(key)?.let{return Result(it.optLong("time"),it.optString("source"))}
+  if(!fresh){values!!.optJSONObject(key)?.let{if(it.optLong("time")>0)return Result(it.optLong("time"),it.optString("source"))};if(key in missing)return Result(0,"")}
   fun extract()=if(mime.startsWith("video/"))video(file)else image(file)
   val result=if(fresh)extract()else try{extract()}catch(_:Exception){return Result(0,"")}
-  values!!.put(key,JSONObject().put("time",result.time).put("source",result.source));dirty=true
+  if(result.time>0){values!!.put(key,JSONObject().put("time",result.time).put("source",result.source));missing.remove(key)}else{values!!.remove(key);missing.add(key)};dirty=true
   return result
  }
  @Synchronized fun rememberOriginal(c:Context,file:File,mime:String,time:Long){

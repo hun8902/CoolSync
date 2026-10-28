@@ -16,6 +16,7 @@ struct PhotosPane:View {
         HStack(spacing:0){
             if photos.sidebarShown{sidebar.frame(width:215).background(.ultraThinMaterial);Divider()}
             VStack(spacing:0){toolbar;Divider();
+                if !photos.bulkInfoStatus.isEmpty{HStack{if photos.bulkInfoActive{ProgressView(value:Double(photos.bulkInfoDone),total:Double(max(1,photos.bulkInfoTotal))).frame(width:100)};Text(photos.bulkInfoStatus).lineLimit(1);Spacer();if photos.bulkInfoActive{Button("중단"){photos.stopBulkInfo()}};if !photos.bulkInfoFailures.isEmpty{Menu("실패 내역"){ForEach(Array(photos.bulkInfoFailures.enumerated()),id:\.offset){Text($0.element)}};Button("실패 항목 재조회"){photos.retryBulkInfo()}.disabled(photos.bulkInfoActive)}}.font(.caption).padding(10).background(.bar)}
                 if !photos.photoSyncActivity.isEmpty{HStack{Image(systemName:"arrow.triangle.2.circlepath");Text(photos.photoSyncActivity);Spacer()}.font(.caption).padding(10).background(.bar)}
                 if !photos.pendingDeletes.isEmpty || !photos.deleteActivity.isEmpty{HStack(spacing:10){if photos.deleteInFlight{ProgressView().controlSize(.small)}else{Image(systemName:photos.pendingDeletes.isEmpty ? "checkmark.circle.fill":"clock")};Text(photos.deleteActivity.isEmpty ? "연결되면 삭제 대기를 자동 처리합니다":photos.deleteActivity);Spacer();Button("삭제 상태"){photos.showPendingDeletes=true}}.font(.caption).padding(10).background(.bar)}
 
@@ -54,7 +55,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
         HStack(spacing:14){Button{photos.sidebarShown.toggle()}label:{Image(systemName:"sidebar.left")};if photos.preview != nil{Button{photos.closePreview()}label:{Image(systemName:"chevron.left")}};VStack(alignment:.leading,spacing:3){Text(photos.title).font(.system(size:16,weight:.semibold)).lineLimit(1);Text(photos.sortTitle).font(.caption).foregroundStyle(.secondary)};Spacer()
             Button{photos.chooseImport()}label:{Image(systemName:"square.and.arrow.down")}
             Button{photos.toggleInfo()}label:{Image(systemName:"info.circle")}
-            Menu{sortCommands;Divider();Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")};Slider(value:$photos.zoom,in:90...240);Button("변경분 동기화"){photos.reload()};Button("선택 원본 보관"){photos.cacheSelection()};Button("삭제 대기 목록"){photos.showPendingDeletes=true};Button("Mac으로 복사…"){photos.export()};Button("Mac으로 이동…"){photos.export(move:true)};Button("즐겨찾기"){photos.favorite()};Button("휴지통으로 이동…"){photos.remove()};Button("새 앨범…"){photos.albumCreate()};Menu("앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}}}label:{Image(systemName:"ellipsis.circle")}
+            Menu{sortCommands;Divider();Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")}.disabled(photos.sortKey=="name");Slider(value:$photos.zoom,in:90...240);Button("변경분 동기화"){photos.reload()};Button("선택 원본 보관"){photos.cacheSelection()};Button("삭제 대기 목록"){photos.showPendingDeletes=true};Button("Mac으로 복사…"){photos.export()};Button("Mac으로 이동…"){photos.export(move:true)};Button("즐겨찾기"){photos.favorite()};Button("휴지통으로 이동…"){photos.remove()};Button("새 앨범…"){photos.albumCreate()};Menu("앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}}}label:{Image(systemName:"ellipsis.circle")}
         }.buttonStyle(.borderless).padding(16).background(.ultraThinMaterial)
     }
     private var wideToolbar:some View{
@@ -65,7 +66,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
             if photos.preview==nil{
                 HStack(spacing:6){Image(systemName:"minus").font(.system(size:10));Slider(value:$photos.zoom,in:90...240).frame(width:70);Image(systemName:"plus").font(.system(size:10))}
                     .padding(9).background(.thinMaterial,in:Capsule())
-                Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")}.pickerStyle(.segmented).frame(width:180)
+                Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")}.disabled(photos.sortKey=="name").pickerStyle(.segmented).frame(width:180)
             }
             Spacer(minLength:4)
             HStack(spacing:13){Button{photos.chooseImport()}label:{Image(systemName:"square.and.arrow.down")}.help("Mac에서 사진·영상 가져오기")
@@ -80,9 +81,10 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
     }
     private var sortCommands:some View{
         Group{
-            if photos.scope=="recent"{Text("최근 항목은 추가일 기준")}else{Picker("날짜 기준",selection:$photos.sortKey){Text("촬영일 · 없으면 추가일").tag("captured");Text("추가일").tag("added")}}
-            Picker("정렬 방향",selection:$photos.ascending){Text("최신순").tag(false);Text("오래된순").tag(true)}
-            Divider();Menu("원본 촬영일로 파일 수정일 맞추기"){
+            Picker("정렬 기준",selection:$photos.sortKey){Text("파일명").tag("name");Text("촬영일 · 없으면 추가일").tag("captured");Text("추가일").tag("added")}
+            Picker("정렬 방향",selection:$photos.ascending){Text(photos.sortKey=="name" ? "내림차순":"최신순").tag(false);Text(photos.sortKey=="name" ? "오름차순":"오래된순").tag(true)}
+            Divider();Button("캐시된 사진 촬영정보 전체 다시 불러오기"){photos.refreshAllCachedInfo()}.disabled(photos.bulkInfoActive)
+            Menu("원본 촬영일로 파일 수정일 맞추기"){
                 Button("선택한 사진·동영상…"){photos.alignModifiedDates()}.disabled(photos.selection.isEmpty)
                 Button("현재 앨범 전체…"){photos.alignModifiedDates("album")}.disabled(photos.album.isEmpty)
                 Button("사진·동영상 보관함 전체…"){photos.alignModifiedDates("all")}
@@ -90,7 +92,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
             }.disabled(photos.loading || photos.caching || photos.moving)
         }
     }
-    private var range:String{let valid=photos.items.filter{photos.orderTime($0)>0};guard let first=valid.first,let last=valid.last else{return photos.loading ? "불러오는 중…":"날짜 없음"};let dates=[photos.orderDate(first),photos.orderDate(last)].sorted();return dates[0].formatted(date:.numeric,time:.omitted)+" – "+dates[1].formatted(date:.numeric,time:.omitted)}
+    private var range:String{if photos.sortKey=="name"{return "\(photos.filtered.count)개"};let valid=photos.items.filter{photos.orderTime($0)>0};guard let first=valid.first,let last=valid.last else{return photos.loading ? "불러오는 중…":"날짜 없음"};let dates=[photos.orderDate(first),photos.orderDate(last)].sorted();return dates[0].formatted(date:.numeric,time:.omitted)+" – "+dates[1].formatted(date:.numeric,time:.omitted)}
     private func viewer(_ item:PhotoItem)->some View{
         ZStack{Color.black
             if photos.previewLoading{VStack(spacing:14){ProgressView();Text(photos.previewPhase).foregroundStyle(.white);Text("가져온 뒤 사진을 표시하거나 영상을 재생합니다.").font(.system(size:12)).foregroundStyle(.gray)}}
@@ -113,7 +115,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
             Text("정보").font(.system(size:17,weight:.semibold))
             if let item=photos.selected.first,photos.selected.count==1{
                 Text(item.name).font(.system(size:13,weight:.semibold)).textSelection(.enabled)
-                Text(photos.info["captured"] ?? (item.date>0 ? item.timestamp.formatted():"날짜 없음")).font(.system(size:12)).foregroundStyle(.secondary);Text(photos.info["captured"] == nil ? photos.dateSourceTitle(item):"원본 촬영정보").font(.caption).foregroundStyle(.secondary);if let added=item.added,added>0{Text("추가일 · "+Date(timeIntervalSince1970:Double(added)/1000).formatted()).font(.caption).foregroundStyle(.secondary)}
+                Text(photos.info["captured"] ?? (item.date>0 ? item.timestamp.formatted():"날짜 없음")).font(.system(size:12)).foregroundStyle(.secondary);Text(photos.info["captured"] == nil ? photos.dateSourceTitle(item):(photos.info["captureSource"]=="media-store" ? "휴대폰 갤러리 촬영일":"원본 촬영정보")).font(.caption).foregroundStyle(.secondary);if let added=item.added,added>0{Text("추가일 · "+Date(timeIntervalSince1970:Double(added)/1000).formatted()).font(.caption).foregroundStyle(.secondary)}
                 HStack{Text("\(item.width) × \(item.height)");Spacer();Text(ByteCountFormatter.string(fromByteCount:item.size,countStyle:.file))}.font(.system(size:11)).foregroundStyle(.secondary)
                 Divider()
                 HStack{Button("휴대폰 원본에서 다시 조회"){photos.refreshInfoOriginal()}.disabled(photos.infoRefreshing || photos.connected?()==false);if photos.infoRefreshing{ProgressView().controlSize(.small)}}
@@ -141,11 +143,6 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
 
 }
 
-private final class PhotoTile:NSCollectionViewItem {
-    let badge=NSTextField(labelWithString:"")
-    override func loadView(){let box=NSView();box.wantsLayer=true;box.layer?.cornerRadius=7;view=box;let image=NSImageView();image.imageScaling = .scaleProportionallyUpOrDown;image.translatesAutoresizingMaskIntoConstraints=false;box.addSubview(image);imageView=image;badge.translatesAutoresizingMaskIntoConstraints=false;badge.font = .monospacedDigitSystemFont(ofSize:11,weight:.semibold);badge.textColor = .white;badge.backgroundColor=NSColor.black.withAlphaComponent(0.55);badge.drawsBackground=true;box.addSubview(badge);NSLayoutConstraint.activate([image.leadingAnchor.constraint(equalTo:box.leadingAnchor,constant:4),image.trailingAnchor.constraint(equalTo:box.trailingAnchor,constant:-4),image.topAnchor.constraint(equalTo:box.topAnchor,constant:4),image.bottomAnchor.constraint(equalTo:box.bottomAnchor,constant:-4),badge.trailingAnchor.constraint(equalTo:box.trailingAnchor,constant:-9),badge.bottomAnchor.constraint(equalTo:box.bottomAnchor,constant:-8)])}
-    override var isSelected:Bool{didSet{view.layer?.borderWidth=isSelected ? 3:0;view.layer?.borderColor=NSColor.controlAccentColor.cgColor;view.layer?.backgroundColor=isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor:NSColor.clear.cgColor}}
-}
 private final class PhotoHeader:NSView {
     let label=NSTextField(labelWithString:"")
     override init(frame:NSRect){super.init(frame:frame);label.font = .systemFont(ofSize:20,weight:.semibold);label.translatesAutoresizingMaskIntoConstraints=false;addSubview(label);NSLayoutConstraint.activate([label.leadingAnchor.constraint(equalTo:leadingAnchor,constant:12),label.centerYAnchor.constraint(equalTo:centerYAnchor)])}
@@ -162,7 +159,7 @@ struct PhotoGrid:NSViewRepresentable {
     func makeCoordinator()->Coordinator{Coordinator(model)}
     func makeNSView(context:Context)->NSScrollView{
         let collection=PhotosCollection(frame:NSRect(x:0,y:0,width:800,height:600));collection.autoresizingMask=[.width];collection.isSelectable=true;collection.allowsMultipleSelection=true;collection.backgroundColors=[.clear];collection.delegate=context.coordinator;collection.dataSource=context.coordinator;context.coordinator.collection=collection
-        let flow=NSCollectionViewFlowLayout();flow.minimumInteritemSpacing=8;flow.minimumLineSpacing=12;flow.sectionInset=NSEdgeInsets(top:12,left:18,bottom:20,right:18);collection.collectionViewLayout=flow
+        let flow=NSCollectionViewFlowLayout();flow.estimatedItemSize = .zero;flow.minimumInteritemSpacing=8;flow.minimumLineSpacing=12;flow.sectionInset=NSEdgeInsets(top:12,left:18,bottom:20,right:18);collection.collectionViewLayout=flow
         collection.register(PhotoTile.self,forItemWithIdentifier:.init("photo"));collection.register(PhotoHeader.self,forSupplementaryViewOfKind:NSCollectionView.elementKindSectionHeader,withIdentifier:.init("header"));collection.setDraggingSourceOperationMask(.copy,forLocal:false);collection.setDraggingSourceOperationMask([.copy,.move],forLocal:true)
         let click=NSClickGestureRecognizer(target:context.coordinator,action:#selector(Coordinator.open));click.numberOfClicksRequired=2;collection.addGestureRecognizer(click)
         collection.contextSelection={ [weak coordinator=context.coordinator,weak collection] in if let collection{coordinator?.sync(collection)}}
@@ -179,7 +176,7 @@ struct PhotoGrid:NSViewRepresentable {
         let fingerprint="\(model.revision)|\(model.search)|\(model.grouping)";let wanted=model.selection
         c.syncing=true
         if fingerprint != c.fingerprint{c.fingerprint=fingerprint;c.sections=model.sections;c.collection?.reloadData()}
-        if let layout=c.collection?.collectionViewLayout as?NSCollectionViewFlowLayout{layout.itemSize=NSSize(width:model.zoom,height:model.zoom);layout.headerReferenceSize=NSSize(width:1,height:model.grouping=="all" ? 0:48);if changed{layout.invalidateLayout()}}
+        if let layout=c.collection?.collectionViewLayout as?NSCollectionViewFlowLayout{let size=NSSize(width:model.zoom,height:model.zoom);let header=NSSize(width:1,height:model.grouping=="all" || model.sortKey=="name" ? 0:48);if layout.itemSize != size{layout.itemSize=size};if layout.headerReferenceSize != header{layout.headerReferenceSize=header};if changed{layout.invalidateLayout()}}
         let selected=Set(c.sections.enumerated().flatMap{s,section in section.items.enumerated().compactMap{i,item in wanted.contains(item.path) ? IndexPath(item:i,section:s):nil}})
         if c.collection?.selectionIndexPaths != selected{c.collection?.selectionIndexPaths=selected}
         c.syncing=false

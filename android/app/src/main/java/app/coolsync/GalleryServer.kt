@@ -47,7 +47,7 @@ object GalleryServer {
   val framed=DataOutputStream(output);val random=SecureRandom();var index=0
   fun send(clear:ByteArray){require(service.authenticated&&expected==token);val nonce=ByteArray(12).also{random.nextBytes(it)};val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,SecretKeySpec(key,"AES"),GCMParameterSpec(128,nonce));cipher.updateAAD("CoolSync/original/1|$id|$index".toByteArray());val bytes=nonce+cipher.doFinal(clear);framed.writeInt(bytes.size);framed.write(bytes);index++}
   send(header);var total=0L
-  file.inputStream().use{input->val buffer=ByteArray(65536);while(total<size){val want=minOf(buffer.size.toLong(),size-total).toInt();var read=0;while(read<want){val n=input.read(buffer,read,want-read);require(n>0);read+=n};send(buffer.copyOf(read));total+=read}}
+  android.os.ParcelFileDescriptor.AutoCloseInputStream(GalleryMedia.openOriginal(service,q.getString("path"),q.getString("id"))).use{input->val buffer=ByteArray(65536);while(total<size){val want=minOf(buffer.size.toLong(),size-total).toInt();var read=0;while(read<want){val n=input.read(buffer,read,want-read);require(n>0);read+=n};send(buffer.copyOf(read));total+=read}}
   require(file.exists()&&file.length()==size&&file.lastModified()==modified);send(end);framed.flush()
  }
 

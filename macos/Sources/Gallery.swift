@@ -93,7 +93,7 @@ final class PhotosModel:ObservableObject {
     private var previewGeneration=UUID()
     private var motionExtraction:Task<URL?,Error>?
     private var motionEndObserver:NSObjectProtocol?
-    @Published var sortKey=UserDefaults.standard.string(forKey:"photoSortKey") ?? "captured"{didSet{UserDefaults.standard.set(sortKey,forKey:"photoSortKey");applyView()}}
+    @Published var sortKey=UserDefaults.standard.string(forKey:"photoSortKey") ?? "name"{didSet{UserDefaults.standard.set(sortKey,forKey:"photoSortKey");applyView()}}
     @Published var ascending=UserDefaults.standard.bool(forKey:"photoSortAscending"){didSet{UserDefaults.standard.set(ascending,forKey:"photoSortAscending");applyView()}}
     @Published var previewLoading=false
     @Published var previewError=""
@@ -102,6 +102,15 @@ final class PhotosModel:ObservableObject {
     @Published var showPendingDeletes=false
     @Published private(set) var infoStatus=""
     @Published private(set) var infoRefreshing=false
+    @Published private(set) var bulkInfoActive=false
+    @Published private(set) var bulkInfoDone=0
+    @Published private(set) var bulkInfoTotal=0
+    @Published private(set) var bulkInfoMissing=0
+    @Published private(set) var bulkInfoFailures:[String]=[]
+    @Published private(set) var bulkInfoStatus=""
+    private var bulkInfoFailedPaths=Set<String>()
+    private var bulkInfoBusy=false
+    private var bulkInfoToken=UUID()
     private var infoFetchToken=UUID()
     @Published private(set) var photoSyncActivity=""
     @Published private(set) var deleteCompleted=0
@@ -183,13 +192,15 @@ final class PhotosModel:ObservableObject {
     func orderDate(_ item:PhotoItem)->Date{Date(timeIntervalSince1970:Double(orderTime(item))/1000)}
     func dateSourceTitle(_ item:PhotoItem)->String{["exif":"원본 촬영일 (EXIF)","video":"영상 내부 촬영일","captured":"기기 제공 촬영일","added":"추가일 · 원본 촬영일 없음","modified":"수정일 · 원본 촬영일 없음","unknown":"날짜 없음"][item.dateSource ?? ""] ?? "기존 목록 날짜"}
     var sections:[PhotoSection]{
-        let rows=filtered;guard grouping != "all"else{return[PhotoSection(title:"",items:rows)]}
+        let rows=filtered;guard grouping != "all" && sortKey != "name"else{return[PhotoSection(title:"",items:rows)]}
         let formatter=DateFormatter();formatter.dateFormat=grouping=="year" ? "yyyy년":"yyyy년 M월"
         var result:[PhotoSection]=[]
         for item in rows{let title=orderTime(item)>0 ? formatter.string(from:orderDate(item)):"날짜 없음";if result.last?.title==title{let old=result.removeLast();result.append(PhotoSection(title:title,items:old.items+[item]))}else{result.append(PhotoSection(title:title,items:[item]))}}
         return result
     }
     func configure(identity:Data){
+        if !UserDefaults.standard.bool(forKey:"photoFilenameSortV1"){sortKey="name";ascending=true;grouping="all";UserDefaults.standard.set(true,forKey:"photoFilenameSortV1")}
+        bulkInfoToken=UUID();bulkInfoBusy=false;bulkInfoActive=false;bulkInfoDone=0;bulkInfoFailures=[];bulkInfoFailedPaths=[];bulkInfoStatus=""
         editedRefreshToken=UUID();editedRefreshActive=false;editedRefreshFailures=[]
         dateRetry=[];dateWorkRemaining=[];dateWorkToken=UUID();dateWorkFailures=[];dateWorkNotes=[];dateWorkActive=false;dateWorkStopped=true
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();originals.cancelAll();thumbnails.close();thumbnails.clear();closePreview()
@@ -205,11 +216,11 @@ final class PhotosModel:ObservableObject {
         let pending=Set(pendingDeletes.filter{$0.phoneDeleted}.map{$0.item.cacheIdentity})
         var rows=(disk?.catalog.items ?? []).filter{!pending.contains($0.cacheIdentity) && (album.isEmpty || $0.album==album) && (scope != "videos" || $0.video) && (scope != "favorites" || $0.favorite) && (scope != "screenshots" || $0.album.localizedCaseInsensitiveContains("screenshot"))}
         rows.sort{a,b in
+            if sortKey=="name"{return PhotoOrdering.filename(a.name,path:a.path,id:a.id,b.name,path:b.path,id:b.id,ascending:ascending)}
             let left=orderTime(a),right=orderTime(b)
             if (left>0) != (right>0){return left>0}
             if left != right{return ascending ? left<right:left>right}
-            if let x=Int64(a.id),let y=Int64(b.id),x != y{return ascending ? x<y:x>y}
-            return a.path.localizedStandardCompare(b.path) == .orderedAscending
+            return PhotoOrdering.filename(a.name,path:a.path,id:a.id,b.name,path:b.path,id:b.id,ascending:ascending)
         }
         if !preservePreview,let preview,!rows.contains(where:{$0.cacheIdentity==preview.cacheIdentity}){closePreview()}
         items=rows;albums=disk?.catalog.albums ?? [];total=rows.count;selection.formIntersection(Set(rows.map{$0.path}));revision+=1
@@ -217,6 +228,7 @@ final class PhotosModel:ObservableObject {
         if !pendingDeletes.isEmpty{status += " · 삭제 대기 \(pendingDeletes.count)개"}
     }
     func reconnected(){
+        if let disk,!disk.metadataPaths.isEmpty{bulkInfoActive=true;bulkInfoTotal=bulkInfoDone+disk.metadataPaths.count}
         editedRefreshFailures=[]
         if !pendingDeletes.isEmpty{retryDeletes(automatic:true)}
         reload()
@@ -298,7 +310,7 @@ final class PhotosModel:ObservableObject {
                 }
                 self.loading=false;self.applyView();self.status += value.dateSchema==3 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 원본 촬영일을 표시할 수 있습니다";self.refreshCacheUsage()
                 if let reopen{self.open(reopen)}
-                if self.infoShown{self.loadInfo()};self.processPendingDeletes();self.refreshEditedOriginals()
+                if self.infoShown{self.loadInfo()};self.processPendingDeletes();self.refreshEditedOriginals();self.processBulkInfo()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}
             }catch{self.loading=false;self.error="Mac 캐시 저장 또는 정리를 완료하지 못했습니다: \(error.localizedDescription)";self.applyView()}
         }
@@ -317,6 +329,48 @@ final class PhotosModel:ObservableObject {
             self.applyInfo(strings)
             if let url=self.disk?.original(item){self.readLocalInfo(item,url:url,generation:generation)}else{self.infoStatus=strings["metadataError"] ?? "휴대폰 촬영정보 확인됨 · Mac 원본 확인 전";self.disk?.putDetails(self.info,item)}
             if !self.hasCaptureInfo(self.info){self.fetchInfoOriginal(item,generation:generation)}
+        }
+    }
+    func refreshAllCachedInfo(){
+        guard !bulkInfoActive,let disk else{return}
+        let paths=Set(disk.catalog.items.filter{!$0.video}.map{$0.path})
+        guard !paths.isEmpty else{error="Mac에 캐시된 사진이 없습니다";return}
+        startBulkInfo(paths)
+    }
+    func retryBulkInfo(){startBulkInfo(bulkInfoFailedPaths)}
+    private func startBulkInfo(_ paths:Set<String>){
+        guard !bulkInfoBusy,!paths.isEmpty,let disk else{return}
+        do{try disk.setMetadataPaths(paths);bulkInfoToken=UUID();bulkInfoTotal=paths.count;bulkInfoDone=0;bulkInfoMissing=0;bulkInfoFailures=[];bulkInfoFailedPaths=[];bulkInfoActive=true;bulkInfoStatus="촬영정보 전체 재조회 준비 · \(paths.count)개";processBulkInfo()}catch{self.error=error.localizedDescription}
+    }
+    func stopBulkInfo(){bulkInfoToken=UUID();bulkInfoActive=false;bulkInfoBusy=false;originals.cancel(owner:"bulk-info");try?disk?.setMetadataPaths([]);bulkInfoStatus="촬영정보 전체 재조회 중단"}
+    private func processBulkInfo(){
+        guard bulkInfoActive,!bulkInfoBusy,!loading,connected?()==true,let disk else{return}
+        guard let path=disk.metadataPaths.first else{bulkInfoActive=false;bulkInfoStatus="촬영정보 재조회 완료 · 처리 \(bulkInfoDone)개 · 정보 없음 \(bulkInfoMissing)개 · 실패 \(bulkInfoFailures.count)개";return}
+        guard let item=disk.catalog.items.first(where:{$0.path==path})else{do{try disk.setMetadataPaths(disk.metadataPaths.subtracting([path]));DispatchQueue.main.async{self.processBulkInfo()}}catch{bulkInfoActive=false;bulkInfoStatus=error.localizedDescription};return}
+        bulkInfoBusy=true;let token=bulkInfoToken;bulkInfoStatus="촬영정보 재조회 \(bulkInfoDone+1)/\(bulkInfoTotal) · \(item.name)"
+        func complete(_ values:[String:String]?,failure:String?=nil){
+            guard self.disk===disk,self.bulkInfoToken==token else{return}
+            if let failure{self.bulkInfoFailures.append("\(item.name): \(failure)");self.bulkInfoFailedPaths.insert(path)}else if let values{disk.putDetails(values,disk.catalog.items.first(where:{$0.path==path}) ?? item);if !self.hasCaptureInfo(values){self.bulkInfoMissing+=1}}
+            do{try disk.setMetadataPaths(disk.metadataPaths.subtracting([path]),checkpoint:(self.bulkInfoDone+1)%20==0 || disk.metadataPaths.count<=1)}catch{self.bulkInfoActive=false;self.bulkInfoStatus="진행 기록 저장 실패: \(error.localizedDescription)"}
+            self.bulkInfoDone+=1;self.bulkInfoBusy=false;disk.prune();self.refreshCacheUsage()
+            if self.infoShown && self.selected.count==1 && self.selected.first?.path==path,let values{self.applyInfo(values);self.infoStatus="전체 재조회에서 최신 촬영정보 반영"}
+            DispatchQueue.main.async{self.processBulkInfo()}
+        }
+        rpc?.callPhoto("mediaInfo",["path":path]){[weak self]response in
+            guard let self,self.disk===disk,self.bulkInfoToken==token else{return}
+            var values=(response["info"]as?[String:Any] ?? [:]).mapValues{String(describing:$0)};values["infoSchema"]="3"
+            let location=values["locationAllowed"]=="1" || values["locationAllowed"]=="true"
+            if let url=disk.original(item),let local=try?PhotoMetadata.image(url,location:location){values.merge(local,uniquingKeysWith:{old,new in old.isEmpty ? new:old})}
+            if self.hasCaptureInfo(values){complete(values);return}
+            guard item.size<=disk.budget else{complete(nil,failure:"원본 재조회에 필요한 캐시 한도 초과");return}
+            self.originals.download(item,to:disk.originalURL(item),owner:"bulk-info"){result in
+                guard self.disk===disk,self.bulkInfoToken==token else{return}
+                switch result{
+                case .failure(let error):complete(nil,failure:"휴대폰 원본 재조회 실패: \(error.localizedDescription)")
+                case .success(let receipt):
+                    do{try self.rememberOriginal(receipt.item);let local=try PhotoMetadata.image(receipt.url,location:location);values.merge(local,uniquingKeysWith:{old,new in old.isEmpty ? new:old});complete(values)}catch{complete(nil,failure:"원본 메타데이터 읽기 실패: \(error.localizedDescription)")}
+                }
+            }
         }
     }
     private func hasCaptureInfo(_ values:[String:String])->Bool{["captured","camera","lens","make"].contains{!(values[$0] ?? "").isEmpty}}
@@ -355,16 +409,9 @@ final class PhotosModel:ObservableObject {
                 do{let time=try await self.captureTimeFromOriginal(url,video:true);guard self.infoGeneration==generation else{return};if let time{self.applyInfo(["captured":Date(timeIntervalSince1970:Double(time)/1000).formatted(),"infoSchema":"2"])};self.infoStatus=time==nil ? "동영상 원본 확인됨 · 내부 촬영일 정보 없음":"동영상 원본 촬영정보 확인됨";self.disk?.putDetails(self.info,item)}catch{guard self.infoGeneration==generation else{return};self.infoStatus="동영상 원본 정보 읽기 실패: \(error.localizedDescription)"}
             };return
         }
-        guard let source=CGImageSourceCreateWithURL(url as CFURL,nil),let properties=CGImageSourceCopyPropertiesAtIndex(source,0,nil)as?[String:Any]else{infoStatus="원본 이미지 메타데이터 읽기 실패";return}
-        let exif=properties[kCGImagePropertyExifDictionary as String]as?[String:Any] ?? [:]
-        let tiff=properties[kCGImagePropertyTIFFDictionary as String]as?[String:Any] ?? [:]
-        var values:[String:String]=["infoSchema":"2"]
-        for(target,key)in [("captured","DateTimeOriginal"),("lens","LensModel"),("iso","ISOSpeedRatings"),("exposure","ExposureTime"),("aperture","FNumber"),("focalLength","FocalLength")]{if let value=exif[key]{values[target]=(value as? [Any])?.map{String(describing:$0)}.joined(separator:", ") ?? String(describing:value)}}
-        for(target,key)in [("make","Make"),("camera","Model")]{if let value=tiff[key]{values[target]=String(describing:value)}}
-        if info["locationAllowed"] != "false" && info["locationAllowed"] != "0",let gps=properties[kCGImagePropertyGPSDictionary as String]as?[String:Any],let lat=gps["Latitude"]as?Double,let lon=gps["Longitude"]as?Double{values["latitude"]=String(gps["LatitudeRef"]as?String=="S" ? -lat:lat);values["longitude"]=String(gps["LongitudeRef"]as?String=="W" ? -lon:lon)}
-        applyInfo(values);disk?.putDetails(info,item)
-        infoStatus=values.count>1 ? "Mac 실제 원본에서 촬영정보 확인됨":"Mac 실제 원본 확인됨 · 촬영일·카메라 정보 없음"
+        do{let values=try PhotoMetadata.image(url,location:info["locationAllowed"] != "false" && info["locationAllowed"] != "0");applyInfo(values);disk?.putDetails(info,item);infoStatus=hasCaptureInfo(values) ? "Mac 실제 원본에서 촬영정보 확인됨":"Mac 실제 원본 확인됨 · 촬영일·카메라 정보 없음"}catch{infoStatus="원본 이미지 메타데이터 읽기 실패: \(error.localizedDescription)"}
     }
+
     func toggleInfo(){infoShown.toggle();if infoShown{loadInfo()}}
     func alignModifiedDates(_ target:String="selected",retryPaths:Set<String>=[]){
         let catalog=disk?.catalog.items ?? []
@@ -548,7 +595,7 @@ final class PhotosModel:ObservableObject {
     }
 
     func cancelCache(){cacheGeneration=UUID();caching=false;originals.cancel(owner:"cache");disk?.protected=Set(preview.flatMap{item in disk.map{[$0.originalURL(item),$0.motionURL(item)]}} ?? []);disk?.prune();refreshCacheUsage();status="원본 보관을 취소했습니다"}
-    var sortTitle:String{(scope=="recent" || sortKey=="added" ? "추가일":"촬영일")+" · "+(ascending ? "오래된순":"최신순")}
+    var sortTitle:String{if sortKey=="name"{return "파일명 · "+(ascending ? "오름차순":"내림차순")};return (scope=="recent" || sortKey=="added" ? "추가일":"촬영일")+" · "+(ascending ? "오래된순":"최신순")}
     func refreshCacheUsage(){guard let disk else{return};cacheSummary=ByteCountFormatter.string(fromByteCount:disk.bytes,countStyle:.file)+" / "+ByteCountFormatter.string(fromByteCount:disk.budget,countStyle:.file)}
     func clearCache(){
         guard !caching,!moving,!previewLoading,files?.hasTransfer != true else{error="진행 중인 전송을 마친 뒤 캐시를 정리하세요";return}
@@ -617,6 +664,6 @@ final class PhotosModel:ObservableObject {
     }
     func canNavigatePreview(_ delta:Int)->Bool{guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path})else{return false};return filtered.indices.contains(i+delta)}
     func nextPreview(_ delta:Int){guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path}),filtered.indices.contains(i+delta)else{return};open(filtered[i+delta])}
-    func connectionEnded(){infoFetchToken=UUID();infoRefreshing=false;editedRefreshToken=UUID();editedRefreshActive=false;deleteRequestToken=UUID();if !pendingDeletes.isEmpty{deleteActivity="연결되면 남은 삭제를 자동 처리합니다"};if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
+    func connectionEnded(){bulkInfoToken=UUID();bulkInfoBusy=false;if bulkInfoActive{bulkInfoStatus="연결되면 남은 촬영정보를 자동 재조회합니다"};infoFetchToken=UUID();infoRefreshing=false;editedRefreshToken=UUID();editedRefreshActive=false;deleteRequestToken=UUID();if !pendingDeletes.isEmpty{deleteActivity="연결되면 남은 삭제를 자동 처리합니다"};if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
     func imported(){changed()}
 }
