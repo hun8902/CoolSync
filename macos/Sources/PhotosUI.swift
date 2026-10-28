@@ -28,14 +28,10 @@ struct PhotosPane:View {
                 if !photos.photoSyncActivity.isEmpty{HStack{Image(systemName:"arrow.triangle.2.circlepath");Text(photos.photoSyncActivity);Spacer()}.font(.caption).padding(10).background(.bar)}
                 if !photos.pendingDeletes.isEmpty || !photos.deleteActivity.isEmpty{HStack(spacing:10){if photos.deleteInFlight{ProgressView().controlSize(.small)}else{Image(systemName:photos.pendingDeletes.isEmpty ? "checkmark.circle.fill":"clock")};Text(photos.deleteActivity.isEmpty ? "연결되면 삭제 대기를 자동 처리합니다":photos.deleteActivity);Spacer();Button("삭제 상태"){photos.showPendingDeletes=true}}.font(.caption).padding(10).background(.bar)}
 
-                if photos.dateWorkActive{HStack{ProgressView(value:photos.dateWorkProgress).frame(width:140);Text(photos.status).font(.caption);Spacer();Button("중단"){photos.stopDateWork()}}.padding(10)}
-                if !photos.dateWorkActive && !photos.dateWorkNotes.isEmpty{HStack{Text("수정일 정리 건너뜀 \(photos.dateWorkNotes.count)개");Menu("원본 촬영일 처리 내역"){ForEach(Array(photos.dateWorkNotes.enumerated()),id:\.offset){Text($0.element)}};Spacer()}.font(.caption).padding(8)}
-                if !photos.dateWorkActive && !photos.dateWorkFailures.isEmpty{HStack{Text("수정일 정리 실패 \(photos.dateWorkFailures.count)개");Menu("실패 내역"){ForEach(photos.dateWorkFailures,id:\.self){Text($0)}};Button("실패 항목 재시도…"){photos.retryDateWork()}}.font(.caption).padding(8)}
 HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1:0).allowsHitTesting(photos.preview==nil).accessibilityHidden(photos.preview != nil);if photos.items.isEmpty && !photos.loading && photos.preview==nil{VStack(spacing:12){Image(systemName:"photo.on.rectangle").font(.system(size:35,weight:.light)).foregroundStyle(.tertiary);Text(photos.connected?()==true ? "사진이나 영상이 없습니다":"휴대폰을 연결하세요").foregroundStyle(.secondary);Button("새로 고침"){photos.reload()}}};if let item=photos.preview{viewer(item)}};if photos.infoShown{Divider();inspector.frame(width:275)}};Divider();footer}
         }.background(Color(nsColor:.textBackgroundColor)).onDrop(of:[UTType.fileURL.identifier,photoPathType.rawValue],isTargeted:nil){drop($0,to:photos.album.isEmpty ? "Pictures/CoolSync":photos.album)}.animation(reduceMotion ? nil:.easeInOut(duration:0.18),value:photos.sidebarShown)
         .onAppear{photos.appear()}.onDisappear{photos.disappear()}
         .sheet(isPresented:$photos.showPendingDeletes){PendingPhotoDeletesPane(photos:photos)}
-        .alert("파일 수정일 정리",isPresented:Binding(get:{photos.dateAlignmentResult != nil},set:{if !$0{photos.dateAlignmentResult=nil}})){Button("확인"){photos.dateAlignmentResult=nil}}message:{Text(photos.dateAlignmentResult ?? "")}
         .alert("사진 작업",isPresented:Binding(get:{photos.error != nil},set:{if !$0{photos.error=nil}})){Button("확인"){photos.error=nil}}message:{Text(photos.error ?? "")}
     }
     private var sidebar:some View{
@@ -89,12 +85,12 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
     }
     private var sortCommands:some View{
         Group{
-            Picker("정렬 기준",selection:$photos.sortKey){Text("파일명").tag("name");Text("생성일").tag("captured");Text("추가일").tag("added")}
-            Picker("정렬 방향",selection:$photos.ascending){Text(photos.sortKey=="name" ? "내림차순":"최신순").tag(false);Text(photos.sortKey=="name" ? "오름차순":"오래된순").tag(true)}
+            Text("정렬 기준 · 파일 생성일")
+            Picker("정렬 방향",selection:$photos.ascending){Text("최신순").tag(false);Text("오래된순").tag(true)}
             Divider();Button("캐시된 사진 촬영정보 전체 다시 불러오기"){photos.refreshAllCachedInfo()}.disabled(photos.bulkInfoActive)
         }
     }
-    private var range:String{if photos.sortKey=="name"{return "\(photos.filtered.count)개"};let valid=photos.items.filter{photos.orderTime($0)>0};guard let first=valid.first,let last=valid.last else{return photos.loading ? "불러오는 중…":"날짜 없음"};let dates=[photos.orderDate(first),photos.orderDate(last)].sorted();return dates[0].formatted(date:.numeric,time:.omitted)+" – "+dates[1].formatted(date:.numeric,time:.omitted)}
+    private var range:String{let valid=photos.items.filter{photos.orderTime($0)>0};guard let first=valid.first,let last=valid.last else{return photos.loading ? "불러오는 중…":"날짜 없음"};let dates=[photos.orderDate(first),photos.orderDate(last)].sorted();return dates[0].formatted(date:.numeric,time:.omitted)+" – "+dates[1].formatted(date:.numeric,time:.omitted)}
     private func viewer(_ item:PhotoItem)->some View{
         ZStack{Color.black
             if photos.previewLoading{VStack(spacing:14){ProgressView();Text(photos.previewPhase).foregroundStyle(.white);Text("가져온 뒤 사진을 표시하거나 영상을 재생합니다.").font(.system(size:12)).foregroundStyle(.gray)}}
@@ -117,7 +113,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
             Text("정보").font(.system(size:17,weight:.semibold))
             if let item=photos.selected.first,photos.selected.count==1{
                 Text(item.name).font(.system(size:13,weight:.semibold)).textSelection(.enabled)
-                Text(photos.info["captured"] ?? (photos.timelineTime(item)>0 ? Date(timeIntervalSince1970:Double(photos.timelineTime(item))/1000).formatted():"날짜 없음")).font(.system(size:12)).foregroundStyle(.secondary);Text(photos.info["captured"] == nil ? photos.dateSourceTitle(item):(photos.info["captureSource"]=="media-store" ? "휴대폰 갤러리 촬영일":"원본 촬영정보")).font(.caption).foregroundStyle(.secondary);if let added=item.added,added>0{Text("추가일 · "+Date(timeIntervalSince1970:Double(added)/1000).formatted()).font(.caption).foregroundStyle(.secondary)}
+                Text(photos.timelineTime(item)>0 ? Date(timeIntervalSince1970:Double(photos.timelineTime(item))/1000).formatted():"파일 생성일 조회 실패").font(.system(size:12)).foregroundStyle(.secondary);Text(photos.dateSourceTitle(item)).font(.caption).foregroundStyle(.secondary)
                 HStack{Text("\(item.width) × \(item.height)");Spacer();Text(ByteCountFormatter.string(fromByteCount:item.size,countStyle:.file))}.font(.system(size:11)).foregroundStyle(.secondary)
                 Divider()
                 Text(photos.infoStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
@@ -172,12 +168,12 @@ struct PhotoGrid:NSViewRepresentable {
     }
     func updateNSView(_ scroll:NSScrollView,context:Context){
         let c=context.coordinator;c.model=model
-        let order="\(model.scope)|\(model.album)|\(model.sortKey)|\(model.ascending)|\(model.grouping)"
+        let order="\(model.scope)|\(model.album)|\(model.ascending)|\(model.grouping)"
         let changed=order != c.order;c.order=order
         let fingerprint="\(model.revision)|\(model.search)|\(model.grouping)";let wanted=model.selection
         c.syncing=true
         if fingerprint != c.fingerprint{c.fingerprint=fingerprint;c.sections=model.sections;c.collection?.reloadData()}
-        if let layout=c.collection?.collectionViewLayout as?NSCollectionViewFlowLayout{let size=NSSize(width:model.zoom,height:model.zoom);let header=NSSize(width:1,height:model.grouping=="all" || model.sortKey=="name" ? 0:48);if layout.itemSize != size{layout.itemSize=size};if layout.headerReferenceSize != header{layout.headerReferenceSize=header};if changed{layout.invalidateLayout()}}
+        if let layout=c.collection?.collectionViewLayout as?NSCollectionViewFlowLayout{let size=NSSize(width:model.zoom,height:model.zoom);let header=NSSize(width:1,height:model.grouping=="all" ? 0:48);if layout.itemSize != size{layout.itemSize=size};if layout.headerReferenceSize != header{layout.headerReferenceSize=header};if changed{layout.invalidateLayout()}}
         let selected=Set(c.sections.enumerated().flatMap{s,section in section.items.enumerated().compactMap{i,item in wanted.contains(item.path) ? IndexPath(item:i,section:s):nil}})
         if c.collection?.selectionIndexPaths != selected{c.collection?.selectionIndexPaths=selected}
         c.syncing=false

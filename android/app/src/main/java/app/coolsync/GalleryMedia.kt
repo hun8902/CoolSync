@@ -14,8 +14,6 @@ import android.util.Base64
 import androidx.exifinterface.media.ExifInterface
 import org.json.*
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -23,10 +21,6 @@ import java.util.concurrent.TimeUnit
 object GalleryMedia {
  data class Item(val id:Long,val path:String,val name:String,val album:String,val mime:String,val size:Long,val date:Long,val modified:Long,val width:Int,val height:Int,val duration:Long,val generation:Long,val added:Long,val dateSource:String){
   fun json(favorites:Set<String>)=JSONObject().put("id",id.toString()).put("path",path).put("name",name).put("album",album).put("mime",mime).put("size",size).put("date",date).put("modified",modified).put("width",width).put("height",height).put("duration",duration).put("favorite",path in favorites).put("generation",generation).put("added",added).put("dateSource",dateSource)
- }
- private fun filenameDate(name:String):Long{
-  if(!Regex("^[0-9]{8}_[0-9]{6}(?:\\([0-9]+\\))?\\.[^.]+$").matches(name))return 0L
-  return runCatching{java.time.LocalDateTime.parse(name.take(15).replace("_",""),java.time.format.DateTimeFormatter.ofPattern("uuuuMMddHHmmss").withResolverStyle(java.time.format.ResolverStyle.STRICT)).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()}.getOrDefault(0L)
  }
  private var cached:List<Item>?=null
  private var cachedAt=0L
@@ -49,16 +43,14 @@ object GalleryMedia {
     val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
     val taken=long(6)
     val added=long(11)*1000;val modified=(file.lastModified()/1000)*1000
-    val created=runCatching{Files.readAttributes(file.toPath(),BasicFileAttributes::class.java).creationTime().toMillis()}.getOrDefault(0L)
     val original=if(taken<=0)CaptureDates.read(c,file,mime)else CaptureDates.Result(0L,"")
-    val namedDate=if(taken<=0 && original.time<=0)filenameDate(str(2))else 0L
-    val date=when{taken>0->taken;original.time>0->original.time;namedDate>0->namedDate;created>0->created;modified>0->modified;else->added}
-    val source=when{taken>0->"captured";original.time>0->original.source;namedDate>0->"filename";created>0->"created";modified>0->"modified";added>0->"added";else->"unknown"}
+    val date=if(taken>0)taken else original.time
+    val source=if(taken>0)"captured"else if(original.time>0)original.source else "unknown"
     result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),date,modified,long(7).toInt(),long(8).toInt(),long(9),long(10),added,source))
    }
   }
   CaptureDates.flush(c)
-  result.sortWith(compareByDescending<Item>{it.date}.thenByDescending{it.id});cached=result;cachedAt=System.currentTimeMillis();return result
+  cached=result;cachedAt=System.currentTimeMillis();return result
  }
  fun syncRows(c:Context):List<JSONObject>{invalidate();val favorite=favorites(c);return items(c).map{it.json(favorite)}}
  fun file(c:Context,path:String):File{val f=StorageBridge.engine(c).resolve(path);val mime=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "";if(!f.isFile||(!mime.startsWith("image/")&&!mime.startsWith("video/")))throw StorageFault("media","사진 또는 영상 파일이 아닙니다");return f}
@@ -83,7 +75,7 @@ object GalleryMedia {
    "mediaList"->{
     val favorite=favorites(c);val album=q.optString("album");val scope=q.optString("scope","all");val search=q.optString("search").lowercase()
     val rows=items(c).filter{(album.isEmpty()||it.album==album)&&(search.isEmpty()||it.name.lowercase().contains(search))&&when(scope){"videos"->it.mime.startsWith("video/");"favorites"->it.path in favorite;"screenshots"->it.album.contains("screenshot",true);else->true}}
-    val ordered=if(scope=="recent")rows.sortedWith(compareByDescending<Item>{it.added}.thenByDescending{it.id})else rows
+    val ordered=rows
     val start=q.optInt("offset").coerceIn(0,ordered.size);val page=ordered.drop(start).take(40)
     out.put("items",JSONArray(page.map{it.json(favorite)})).put("next",start+page.size).put("total",ordered.size)
    }

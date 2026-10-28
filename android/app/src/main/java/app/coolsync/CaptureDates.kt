@@ -39,7 +39,7 @@ object CaptureDates {
  }
  private fun image(file:File):Result = imageExif(ExifInterface(file))
  fun imageExif(exif:ExifInterface):Result {
-  val tags=listOf(ExifInterface.TAG_DATETIME_ORIGINAL to ExifInterface.TAG_OFFSET_TIME_ORIGINAL,ExifInterface.TAG_DATETIME_DIGITIZED to ExifInterface.TAG_OFFSET_TIME_DIGITIZED,ExifInterface.TAG_DATETIME to ExifInterface.TAG_OFFSET_TIME)
+  val tags=listOf(ExifInterface.TAG_DATETIME_ORIGINAL to ExifInterface.TAG_OFFSET_TIME_ORIGINAL,ExifInterface.TAG_DATETIME_DIGITIZED to ExifInterface.TAG_OFFSET_TIME_DIGITIZED)
   val selected=tags.firstOrNull{!exif.getAttribute(it.first).isNullOrBlank()} ?: return Result(0,"")
   val original=exif.getAttribute(selected.first)!!.trim()
   val offset=exif.getAttribute(selected.second)?.trim()
