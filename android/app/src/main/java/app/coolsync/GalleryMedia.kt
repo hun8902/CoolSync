@@ -111,25 +111,28 @@ object GalleryMedia {
  }
  private fun alignDates(c:Context,q:JSONObject,out:JSONObject){
   val requested=q.getJSONArray("items");if(requested.length() !in 1..20)throw StorageFault("selection","한 번에 20개 이하를 선택하세요")
-  val current=items(c).associateBy{it.path};val result=JSONArray();val changed=mutableListOf<String>();val history=c.getSharedPreferences("capture-date-history",0)
+  invalidate();val current=items(c).associateBy{it.path};val result=JSONArray();val changed=mutableListOf<String>();val history=c.getSharedPreferences("capture-date-history",0)
   for(i in 0 until requested.length()){
    val expected=requested.getJSONObject(i);val path=expected.getString("path");val row=JSONObject().put("path",path)
    try{
     val item=current[path] ?: throw StorageFault("missing","사진을 찾지 못했습니다")
-    if(item.id.toString()!=expected.getString("id")||item.size!=expected.getLong("size")||item.modified!=expected.getLong("modified")||item.generation!=expected.optLong("generation"))throw StorageFault("conflict","사진 정보가 변경되었습니다. 먼저 동기화하세요")
-    val file=file(c,path);val capture=CaptureDates.read(c,file,item.mime)
-    if(capture.source!="exif"||capture.time<=0){row.put("status","skipped")}
-    else if(file.lastModified()==capture.time){row.put("status","unchanged")}
+    if(item.id.toString()!=expected.getString("id")||item.size!=expected.getLong("size")||item.modified!=expected.getLong("modified"))throw StorageFault("conflict","사진 정보가 변경되었습니다. 먼저 동기화하세요")
+    val file=file(c,path);val beforeSize=file.length();val beforeModified=file.lastModified()
+    val capture=CaptureDates.read(c,file,item.mime,fresh=true)
+    if(file.length()!=beforeSize||file.lastModified()!=beforeModified)throw StorageFault("conflict","원본 EXIF를 읽는 중 파일이 변경되었습니다")
+    if(capture.source!="exif"||capture.time<=0){row.put("status","skipped").put("reason","휴대폰 원본에 유효한 EXIF 촬영일(DateTimeOriginal)이 없습니다")}
+    else if(file.lastModified()/1000==capture.time/1000){row.put("status","unchanged").put("reason","이미 원본 EXIF 촬영일과 같은 수정일입니다")}
     else{
      if(file.length()!=item.size||file.lastModified()/1000!=item.modified/1000)throw StorageFault("conflict","파일이 변경되어 날짜를 수정하지 않았습니다")
      if(!history.contains(path))history.edit().putLong(path,file.lastModified()).commit()
      if(!file.setLastModified(capture.time))throw StorageFault("write","파일 수정일을 바꾸지 못했습니다")
-     changed.add(path);row.put("status","updated")
+     if(file.lastModified()/1000!=capture.time/1000)throw StorageFault("write","저장소가 수정일 변경을 반영하지 않았습니다")
+     changed.add(path);row.put("status","updated").put("captureTime",capture.time).put("previousModified",beforeModified).put("actualModified",file.lastModified()).put("source","original-exif")
     }
    }catch(e:Exception){row.put("status","failed").put("error",e.message ?: "수정일을 변경하지 못했습니다")}
    result.put(row)
   }
-  rescan(c,changed);invalidate();val after=items(c).associateBy{it.path};val favorite=favorites(c)
+  CaptureDates.flush(c);rescan(c,changed);invalidate();val after=items(c).associateBy{it.path};val favorite=favorites(c)
   for(i in 0 until result.length()){val row=result.getJSONObject(i);if(row.optString("status") in setOf("updated","unchanged"))after[row.getString("path")]?.let{row.put("item",it.json(favorite))}}
   out.put("results",result)
  }
