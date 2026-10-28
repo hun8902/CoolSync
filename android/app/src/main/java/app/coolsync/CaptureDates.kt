@@ -39,11 +39,13 @@ object CaptureDates {
  }
  private fun image(file:File):Result = imageExif(ExifInterface(file))
  fun imageExif(exif:ExifInterface):Result {
-  val original=exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)?.trim() ?: return Result(0,"")
-  val offset=exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)?.trim()
+  val tags=listOf(ExifInterface.TAG_DATETIME_ORIGINAL to ExifInterface.TAG_OFFSET_TIME_ORIGINAL,ExifInterface.TAG_DATETIME_DIGITIZED to ExifInterface.TAG_OFFSET_TIME_DIGITIZED,ExifInterface.TAG_DATETIME to ExifInterface.TAG_OFFSET_TIME)
+  val selected=tags.firstOrNull{!exif.getAttribute(it.first).isNullOrBlank()} ?: return Result(0,"")
+  val original=exif.getAttribute(selected.first)!!.trim()
+  val offset=exif.getAttribute(selected.second)?.trim()
   val zone=if(offset!=null&&offset.matches(Regex("[+-][0-9]{2}:[0-9]{2}")))TimeZone.getTimeZone("GMT$offset")else TimeZone.getDefault()
   val base=parse(original,"yyyy:MM:dd HH:mm:ss",zone)
-  val fraction=exif.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL)?.takeWhile{it.isDigit()}?.take(3)?.padEnd(3,'0')?.toLongOrNull() ?: 0
+  val fraction=exif.getAttribute(if(selected.first==ExifInterface.TAG_DATETIME_ORIGINAL)ExifInterface.TAG_SUBSEC_TIME_ORIGINAL else if(selected.first==ExifInterface.TAG_DATETIME_DIGITIZED)ExifInterface.TAG_SUBSEC_TIME_DIGITIZED else ExifInterface.TAG_SUBSEC_TIME)?.takeWhile{it.isDigit()}?.take(3)?.padEnd(3,'0')?.toLongOrNull() ?: 0
   return if(base>0)Result(base+fraction,"exif")else Result(0,"")
  }
  private fun video(file:File):Result {

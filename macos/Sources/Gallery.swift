@@ -198,7 +198,7 @@ final class PhotosModel:ObservableObject {
     var selected:[PhotoItem]{items.filter{selection.contains($0.path)}}
     func timelineTime(_ item:PhotoItem)->Int64{
         if item.date>0 && ["exif","video","captured"].contains(item.dateSource ?? ""){return item.date}
-        return PhotoOrdering.filenameDate(item.name) ?? item.date
+        return PhotoOrdering.filenameDate(item.name) ?? 0
     }
     func orderTime(_ item:PhotoItem)->Int64{scope=="recent" || sortKey=="added" ? (item.added.flatMap{$0>0 ? $0:nil} ?? 0):timelineTime(item)}
     func orderDate(_ item:PhotoItem)->Date{Date(timeIntervalSince1970:Double(orderTime(item))/1000)}
@@ -259,12 +259,12 @@ final class PhotosModel:ObservableObject {
     func reload(){
         guard connected?()==true,let disk else{applyView();return}
         if loading || !deletingIDs.isEmpty{refreshQueued=true;return}
-        pageGeneration=UUID();let generation=pageGeneration;loading=true;error=nil;status=disk.catalog.dateSchema==6 ? "변경된 사진 확인 중…":"휴대폰 사진 날짜 갱신 중…"
+        pageGeneration=UUID();let generation=pageGeneration;loading=true;error=nil;status=disk.catalog.dateSchema==7 ? "변경된 사진 확인 중…":"휴대폰 사진 날짜 갱신 중…"
         syncPage(offset:0,batch:"",generation:generation,staged:disk.catalog,changes:0)
     }
     private func syncPage(offset:Int,batch:String,generation:UUID,staged:PhotoCatalog,changes:Int){
         guard let disk else{return}
-        rpc?.callPhoto("mediaSync",["since":disk.catalog.dateSchema==6 ? disk.catalog.revision:"","batch":batch,"offset":offset]){[weak self]r in
+        rpc?.callPhoto("mediaSync",["since":disk.catalog.dateSchema==7 ? disk.catalog.revision:"","batch":batch,"offset":offset]){[weak self]r in
             guard let self,self.pageGeneration==generation,self.disk===disk else{return}
             guard r["ok"]as?Bool==true,let events=r["events"]as?[[String:Any]],let token=r["revision"]as?String,let batch=r["batch"]as?String else{self.loading=false;self.applyView();self.status=r["error"]as?String ?? "변경분을 갱신하지 못했습니다. 저장된 목록을 유지합니다.";return}
             var value=staged
@@ -327,7 +327,7 @@ final class PhotosModel:ObservableObject {
                     if edits>0{messages.append("사진 편집·정보 변경 \(edits)개")}
                     if !messages.isEmpty{self.photoSyncActivity=messages.joined(separator:" · ")+" · Mac 자동 반영 완료"}
                 }
-                self.loading=false;self.applyView();self.status += value.dateSchema==6 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 사진 날짜 정렬이 적용됩니다";self.refreshCacheUsage()
+                self.loading=false;self.applyView();self.status += value.dateSchema==7 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 사진 날짜 정렬이 적용됩니다";self.refreshCacheUsage()
                 if let reopen{self.open(reopen)}
                 if self.infoShown{self.loadInfo()};self.processPendingDeletes();self.refreshEditedOriginals();self.processBulkInfo()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}
@@ -629,7 +629,7 @@ final class PhotosModel:ObservableObject {
     }
 
     func cancelCache(){cacheGeneration=UUID();caching=false;originals.cancel(owner:"cache");disk?.protected=Set(preview.flatMap{item in disk.map{[$0.originalURL(item),$0.motionURL(item)]}} ?? []);disk?.prune();refreshCacheUsage();status="원본 보관을 취소했습니다"}
-    var sortTitle:String{if sortKey=="name"{return "파일명 · "+(ascending ? "오름차순":"내림차순")};return (scope=="recent" || sortKey=="added" ? "추가일":"촬영일")+" · "+(ascending ? "오래된순":"최신순")}
+    var sortTitle:String{if sortKey=="name"{return "파일명 · "+(ascending ? "오름차순":"내림차순")};return (scope=="recent" || sortKey=="added" ? "추가일":"생성일")+" · "+(ascending ? "오래된순":"최신순")}
     func refreshCacheUsage(){guard let disk else{return};cacheSummary=ByteCountFormatter.string(fromByteCount:disk.bytes,countStyle:.file)+" / "+ByteCountFormatter.string(fromByteCount:disk.budget,countStyle:.file)}
     func clearCache(){
         guard !caching,!moving,!previewLoading,files?.hasTransfer != true else{error="진행 중인 전송을 마친 뒤 캐시를 정리하세요";return}

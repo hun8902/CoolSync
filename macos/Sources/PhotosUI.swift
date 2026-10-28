@@ -89,7 +89,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
     }
     private var sortCommands:some View{
         Group{
-            Picker("정렬 기준",selection:$photos.sortKey){Text("파일명").tag("name");Text("촬영일 · 파일명 날짜").tag("captured");Text("추가일").tag("added")}
+            Picker("정렬 기준",selection:$photos.sortKey){Text("파일명").tag("name");Text("생성일").tag("captured");Text("추가일").tag("added")}
             Picker("정렬 방향",selection:$photos.ascending){Text(photos.sortKey=="name" ? "내림차순":"최신순").tag(false);Text(photos.sortKey=="name" ? "오름차순":"오래된순").tag(true)}
             Divider();Button("캐시된 사진 촬영정보 전체 다시 불러오기"){photos.refreshAllCachedInfo()}.disabled(photos.bulkInfoActive)
             Menu("원본 촬영일로 파일 수정일 맞추기"){
