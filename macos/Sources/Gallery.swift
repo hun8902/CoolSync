@@ -224,6 +224,19 @@ final class PhotosModel:ObservableObject {
                 let old=disk.catalog.items
                 let oldIDs=Set(old.map{$0.id});let additions=value.items.filter{!oldIDs.contains($0.id)}.count
                 let previouslySynced=disk.catalog.synced != nil
+                let oldAlbums=disk.catalog.albums
+                let selectedIDs=Set(old.filter{self.selection.contains($0.path)}.map{$0.id})
+                let relocated=old.filter{item in guard let current=rows[item.id]else{return false};return current.path != item.path || current.album != item.album}.count
+                let albumChanges=Set(oldAlbums.map{$0.path}).symmetricDifference(Set(value.albums.map{$0.path})).count
+                let wasInAlbum = !self.album.isEmpty
+                var nextAlbum=self.album
+                if !nextAlbum.isEmpty && !value.albums.contains(where:{$0.path==nextAlbum}){
+                    let members=old.filter{$0.album==nextAlbum}
+                    let current=members.compactMap{rows[$0.id]}
+                    let destinations=Set(current.map{$0.album})
+                    if !members.isEmpty,current.count==members.count,destinations.count==1,let destination=destinations.first,value.albums.contains(where:{$0.path==destination}){nextAlbum=destination}
+                    else{nextAlbum=""}
+                }
                 let obsolete=old.filter{rows[$0.id]?.cacheIdentity != $0.cacheIdentity}
                 if !obsolete.isEmpty{
                     let identities=Set(obsolete.map{$0.cacheIdentity})
@@ -234,7 +247,16 @@ final class PhotosModel:ObservableObject {
                 // Keep the old revision until cleanup succeeds so reconnect can retry it.
                 for item in obsolete{try disk.discard(item,trashOriginal:rows[item.id]==nil)}
                 try disk.commit(value)
-                if previouslySynced && additions>0{self.photoSyncActivity="사진 추가·복원 \(additions)개 · Mac 사진첩 자동 반영 완료"}
+                self.album=nextAlbum
+                if wasInAlbum && nextAlbum.isEmpty{self.scope="all"}
+                self.selection=Set(value.items.filter{selectedIDs.contains($0.id)}.map{$0.path})
+                if previouslySynced{
+                    var messages:[String]=[]
+                    if additions>0{messages.append("사진 추가·복원 \(additions)개")}
+                    if relocated>0{messages.append("사진 이동·경로 변경 \(relocated)개")}
+                    if albumChanges>0{messages.append("앨범 목록 갱신")}
+                    if !messages.isEmpty{self.photoSyncActivity=messages.joined(separator:" · ")+" · Mac 자동 반영 완료"}
+                }
                 self.loading=false;self.applyView();self.status += value.dateSchema==3 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 원본 촬영일을 표시할 수 있습니다";self.refreshCacheUsage()
                 if self.infoShown{self.loadInfo()};self.processPendingDeletes()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}
