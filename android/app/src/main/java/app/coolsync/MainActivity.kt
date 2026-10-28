@@ -49,8 +49,6 @@ class MainActivity:Activity() {
     override fun onResume(){
         super.onResume()
         AppUpdates.resume(this)
-        if(prefs.getBoolean("forwardNotifications",false) && notificationAccess())
-            android.service.notification.NotificationListenerService.requestRebind(ComponentName(this,PhoneNotifications::class.java))
         if(!observed){if(Build.VERSION.SDK_INT>=33)registerReceiver(receiver,IntentFilter(SyncService.STATE),RECEIVER_NOT_EXPORTED)else registerReceiver(receiver,IntentFilter(SyncService.STATE),"$packageName.INTERNAL",null);observed=true}
         AppUpdates.changed={if(!isFinishing)render()};AppUpdates.automatic(this)
         render();refreshWizard()
@@ -61,8 +59,6 @@ class MainActivity:Activity() {
     private fun nearby()=checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)==PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE)==PackageManager.PERMISSION_GRANTED
     private fun accessibility()=Settings.Secure.getString(contentResolver,Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)?.contains("$packageName/",true)==true
     private fun notifications()=Build.VERSION.SDK_INT<33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
-    private fun notificationAccess()=Settings.Secure.getString(contentResolver,"enabled_notification_listeners")?.split(':')?.any{ComponentName.unflattenFromString(it)?.packageName==packageName}==true
-    private fun notificationSettings(){startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))}
     private fun storage()=Environment.isExternalStorageManager()
     private fun consume(value:Intent){
         val uri=value.data
@@ -118,7 +114,6 @@ class MainActivity:Activity() {
         permissionRow(body,"파일 관리","Mac에서 내부 저장소 탐색·편집",storage()){special(2)}
         permissionRow(body,"사진 촬영 위치","사진첩에서 촬영 장소 표시 · 선택 사항",checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION)==PackageManager.PERMISSION_GRANTED){requestMediaLocation()}
         permissionRow(body,"알림","연결 상태 표시 · 선택 사항",notifications()){requestRuntime()}
-        permissionRow(body,"Mac으로 알림 공유","다른 앱의 알림 전달 · 선택 사항",notificationAccess()){notificationSettings()}
         space(body,14);body.addView(label("파일 관리 권한도 앱 전용 데이터나 시스템 보호 폴더를 열 수 있게 하지는 않습니다.",12f,secondary))
         wizardContinue?.text=if(nearby()&&accessibility()&&storage())"완료"else "설정 계속"
     }
@@ -145,39 +140,13 @@ class MainActivity:Activity() {
         if(parent.childCount>0)divider(parent)
         val line=LinearLayout(this);line.gravity=Gravity.CENTER_VERTICAL;line.minimumHeight=dp(48);line.setPadding(0,dp(12),0,dp(12));line.addView(label(title),LinearLayout.LayoutParams(0,-2,1f));val control=GlassToggle(this,checked,blue,changed).apply{contentDescription=title};line.addView(control,LinearLayout.LayoutParams(dp(50),dp(30)).apply{leftMargin=dp(18)});line.setOnClickListener{control.performClick()};parent.addView(line)
     }
-    private fun fingerprint()="${SyncService.active?.authenticated}:${SyncService.active?.connecting}:${SyncService.active?.notificationResult}:${prefs.getString("connectionIssue",null)}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}:${if(selectedTab==1)ClipHistory.revision else 0}"
+    private fun fingerprint()="${SyncService.active?.authenticated}:${SyncService.active?.connecting}:${prefs.getString("connectionIssue",null)}:${FilesBridge.offer?.optString("id")}:${FilesBridge.busy}:${if(selectedTab==1)ClipHistory.revision else 0}"
     private fun refreshLive(){
         if(fingerprint()!=liveFingerprint){render();return}
         connectionDetail?.text=connectionText()
         connectionBadge?.text=if(SyncService.active?.authenticated==true)"연결됨" else if(SyncService.active?.connecting==true)"연결 중…" else "미연결"
         values["진행 상태"]?.text=if(FilesBridge.busy) "${FilesBridge.progress}%" else "대기"
         values["마지막 동기화"]?.text=lastSyncText()
-    }
-    private fun sensitiveGuide(){
-        val(_,body)=sheet("인증번호 수신 권한")
-        body.addView(label("1. 알림 공유를 켜고 알림 접근 권한을 허용하세요.\n2. 원문을 보려면 휴대폰과 Mac의 ‘민감한 내용 숨기기’를 끄세요.",15f,ink))
-        space(body,14)
-        body.addView(label("Android 15 이상은 인증번호 알림을 시스템에서 가릴 수 있습니다. 앱 스위치가 시스템 권한을 바꾸지는 않습니다.",14f,secondary))
-        space(body,14)
-        body.addView(label("추가 허용이 필요한 경우: Mac의 ADB와 휴대폰 USB/무선 디버깅을 연결한 뒤 아래 명령을 실행할 수 있습니다. 기기·OS에 따라 지원하지 않을 수 있습니다. 이 앱은 명령을 자동 실행하지 않습니다.",14f,secondary))
-        val command="adb shell cmd appops set app.coolsync RECEIVE_SENSITIVE_NOTIFICATIONS allow"
-        body.addView(label(command,12f,ink).apply{setTextIsSelectable(true)})
-        space(body,12);button(body,"추가 허용 명령 복사",false){getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("인증번호 수신 권한",command));toast("명령을 복사했습니다")}
-        body.addView(label("허용 취소: adb shell cmd appops set app.coolsync RECEIVE_SENSITIVE_NOTIFICATIONS default\n설정 후 새 인증번호 알림으로 수신을 확인하세요. 이미 가려진 과거 알림은 복원되지 않습니다.",12f,secondary))
-        space(body,12);button(body,"알림 접근 설정",false){notificationSettings()};button(body,"CoolSync 앱 권한 설정",false){startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:$packageName")))}
-    }
-    private fun showMessageInbox(){
-        val(dialog,body)=sheet("앱 알림함")
-        button(body,"새로 고침",false){dialog.dismiss();showMessageInbox()}
-        val rows=MessageInbox.rows(this).take(80)
-        if(rows.isEmpty())body.addView(label("아직 수신한 메시지가 없습니다. 알림 공유를 켜세요.",14f,secondary))
-        for(row in rows){
-            val hidden=MessageInbox.hidden(this,row);val heading=if(hidden&&row.optString("kind")!="sms")row.optString("app")else row.optString("title").ifEmpty{row.optString("app")}
-            body.addView(label(heading,15f,ink,true));body.addView(label(android.text.format.DateFormat.format("yyyy-MM-dd a h:mm",row.optString("postedAt").toLongOrNull() ?: 0).toString(),11f,secondary))
-            body.addView(label(if(hidden)"민감한 내용이 숨겨져 있습니다"else row.optString("body"),14f,ink).apply{setTextIsSelectable(!hidden)})
-            if(!hidden)MessageInbox.code(row.optString("title")+" "+row.optString("body"))?.let{code->space(body,6);button(body,"인증번호 $code 복사",false){val clip=ClipData.newPlainText("인증번호",code);clip.description.extras=PersistableBundle().apply{putBoolean("android.content.extra.IS_SENSITIVE",true)};getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(clip);toast("인증번호를 복사했습니다")}}
-            space(body,12);divider(body);space(body,12)
-        }
     }
     private fun lastSyncText()=SyncService.active?.lastSync?.takeIf{it>0}?.let{android.text.format.DateFormat.format("a h:mm",it).toString()} ?: "아직 없음"
     private fun connectionText():String {
@@ -276,19 +245,6 @@ class MainActivity:Activity() {
                 row(g,"권한 관리","›",action={showPermissions()});row(g,"연결 진단","›",action={diagnostics()})
                 toggleRow(g,"재부팅 후 연결 시작",prefs.getBoolean("boot",true)){prefs.edit().putBoolean("boot",it).apply()}
 
-                val alerts=group(appSettings,"알림 공유")
-                toggleRow(alerts,"Mac에 휴대폰 알림 표시",prefs.getBoolean("forwardNotifications",false)){enabled->prefs.edit().putBoolean("forwardNotifications",enabled).apply();if(enabled&&!notificationAccess())notificationSettings()}
-                toggleRow(alerts,"민감한 내용 숨기기",prefs.getBoolean("hideSensitiveNotifications",true)){enabled->prefs.edit().putBoolean("hideSensitiveNotifications",enabled).apply()}
-                row(alerts,"앱 알림함","›","이 휴대폰에 최대 500개 저장합니다.",action={showMessageInbox()})
-                row(alerts,"인증번호 수신 권한 안내","›",action={sensitiveGuide()})
-                row(alerts,"최근 알림 처리","",SyncService.active?.notificationResult ?: "Mac 연결 후 테스트할 수 있습니다")
-                row(alerts,"알림 접근 권한",if(notificationAccess())"허용됨"else"설정 필요",action={notificationSettings()})
-                row(alerts,"Mac으로 테스트 알림 보내기","›",action={
-                    val sync=SyncService.active
-                    if(sync?.authenticated!=true)toast("Mac에 연결한 뒤 테스트해 주세요")
-                    else sync.testNotification()
-                })
-                alerts.addView(label("휴대폰이 잠겨 있어도 새 앱 알림을 Mac으로 보냅니다. Mac 시스템 설정에서도 CoolSync 알림을 허용하세요.",12f,secondary).apply{setPadding(0,dp(8),0,dp(12))})
                 val unlink=group(deviceSettings,"등록된 Mac")
                 row(unlink,"다른 Mac 연결","›",action={manualKey()})
                 row(unlink,"등록 해제","›","저장된 연결 정보를 삭제합니다.",action={confirmUnlink()})

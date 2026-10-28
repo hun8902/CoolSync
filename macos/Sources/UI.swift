@@ -10,8 +10,6 @@ final class DashboardModel: ObservableObject {
     @Published var showConnectionIssue=false
     @Published var connected=false
     @Published var connecting=false
-    @Published var notificationStatus="아직 수신한 알림이 없습니다"
-    @Published var notificationPermissionIssue=""
     @Published var name="연결된 휴대폰 없음"
     @Published var model=""
     @Published var system=""
@@ -22,7 +20,6 @@ final class DashboardModel: ObservableObject {
     let files=FileTransfer()
     let explorer=ExplorerModel()
     let photos=PhotosModel()
-    let inbox=MessageInbox()
     let clipboardState=ClipboardPaneState()
     let history:ClipHistory
     var engine: SyncEngine?
@@ -31,43 +28,14 @@ final class DashboardModel: ObservableObject {
         history=preview ? ClipHistory(folder:FileManager.default.temporaryDirectory.appendingPathComponent("CoolSyncPreview-"+UUID().uuidString),recording:true):ClipHistory.shared
         if preview { keyHex=String(repeating:"0",count:64); return }
         do {
-            let key=try KeyStore.load();photos.configure(identity:key);inbox.configure(identity:key);keyHex=key.map{String(format:"%02x",$0)}.joined()
+            let key=try KeyStore.load();photos.configure(identity:key);keyHex=key.map{String(format:"%02x",$0)}.joined()
             let value=SyncEngine(key:key); engine=value
             value.changed={ [weak self, weak value] status in
                 guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated;self.connecting=value.connecting; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
-                if wasConnected && !value.authenticated { self.explorer.connectionEnded();self.photos.connectionEnded();self.inbox.connectionEnded() }
-                if value.authenticated { self.pairing=false; if !wasConnected { self.refreshNotificationPermission();self.photos.reconnected();self.explorer.reload();self.inbox.refresh() } }
+                if wasConnected && !value.authenticated { self.explorer.connectionEnded();self.photos.connectionEnded() }
+                if value.authenticated { self.pairing=false; if !wasConnected { self.photos.reconnected();self.explorer.reload() } }
             }
             photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.status=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
-            inbox.request={ [weak self,weak value] offset in guard let value,value.authenticated else{self?.inbox.connectionEnded();self?.inbox.status="휴대폰을 연결한 뒤 동기화하세요";return};value.sendControl("notificationHistory","{\"offset\":\(offset)}","") }
-            value.notificationHistory={ [weak self] page in self?.inbox.page(page) }
-            value.phoneNotification={ [weak self] row,finished in
-                guard let self,let entry=self.inbox.receive(row)else{finished("알림 형식을 확인하지 못했습니다");return}
-                let app=entry.app,title=entry.hidden(UserDefaults.standard.object(forKey:"hideSensitiveMessages")as?Bool ?? true) ? "민감한 알림":entry.title
-                let body=entry.hidden(UserDefaults.standard.object(forKey:"hideSensitiveMessages")as?Bool ?? true) ? "CoolSync 메시지에서 확인하세요":entry.body
-                let package=entry.package,icon=row["icon"] ?? ""
-                PhoneNotificationIcons.shared.cache(package:package,encodedIcon:icon)
-                func result(_ text:String){DispatchQueue.main.async{self.notificationStatus=text};finished(text)}
-                guard UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true else { result("Mac CoolSync 설정에서 휴대폰 알림 표시가 꺼져 있습니다");return }
-                let center=UNUserNotificationCenter.current()
-                let content=UNMutableNotificationContent();content.title=app;content.subtitle=title;content.body=body;content.sound = .default
-                content.threadIdentifier="phone."+app;content.userInfo=["kind":"phoneNotification","entryID":entry.id]
-                if !entry.hidden(UserDefaults.standard.object(forKey:"hideSensitiveMessages")as?Bool ?? true),let code=entry.code{content.categoryIdentifier="phoneCode";content.userInfo["code"]=code}
-                func deliver(){
-                    if entry.hidden(UserDefaults.standard.object(forKey:"hideSensitiveMessages")as?Bool ?? true){content.subtitle="민감한 알림";content.body="CoolSync 메시지에서 확인하세요";content.categoryIdentifier="";content.userInfo.removeValue(forKey:"code")}
-                    let cleanup=PhoneNotificationIcons.shared.decorate(content,package:package)
-                    center.add(UNNotificationRequest(identifier:UUID().uuidString,content:content,trigger:nil)){error in
-                        cleanup();result(error.map{"Mac 알림 등록 실패 · "+$0.localizedDescription} ?? "Mac 알림 센터에 등록했습니다")
-                    }
-                }
-                center.getNotificationSettings{settings in
-                    if settings.authorizationStatus == .notDetermined {
-                        center.requestAuthorization(options:[.alert,.sound]){allowed,error in if allowed{deliver()}else{result("Mac 알림 권한이 허용되지 않았습니다. 시스템 설정 → 알림 → CoolSync에서 허용하세요")}}
-                    } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-                        if settings.notificationCenterSetting == .disabled { result("Mac 시스템 설정 → 알림 → CoolSync에서 알림 센터 표시를 켜세요") }else{deliver()}
-                    } else { result("Mac 알림 권한이 거부되어 있습니다. 시스템 설정 → 알림 → CoolSync에서 허용하세요") }
-                }
-            }
             value.mediaChanged={ [weak self] in self?.photos.changed() }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
             value.filesystemMessage={ [weak self] message in self?.explorer.handle(message) }
@@ -80,21 +48,11 @@ final class DashboardModel: ObservableObject {
             name=value.peerName; model=value.peerModel; pairing=model.isEmpty
         } catch { status="키체인 접근을 허용한 뒤 다시 실행하세요" }
     }
-    func refreshNotificationPermission() {
-        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
-            let issue:String
-            if settings.authorizationStatus == .denied { issue="macOS에서 CoolSync 알림이 꺼져 있습니다. Mac 알림 설정에서 허용하세요." }
-            else if settings.authorizationStatus == .notDetermined { issue="첫 알림을 받을 때 Mac의 알림 권한을 허용하세요." }
-            else if settings.notificationCenterSetting == .disabled { issue="macOS에서 CoolSync의 알림 센터 표시가 꺼져 있습니다." }
-            else { issue="" }
-            DispatchQueue.main.async { self?.notificationPermissionIssue=issue }
-        }
-    }
     var pairURL: String { var url=URLComponents(); url.scheme="coolsync"; url.host="pair"; url.queryItems=[URLQueryItem(name:"key",value:keyHex),URLQueryItem(name:"name",value:Host.current().localizedName ?? "Mac")]; return url.string ?? "" }
     func reset() {
         let alert=NSAlert(); alert.messageText="기존 등록을 지우고 새로 연결할까요?"; alert.informativeText="기존 연결 키와 휴대폰 정보를 초기화합니다. 휴대폰의 CoolSync에서 QR 스캔을 눌러 새 QR을 스캔하세요."; alert.addButton(withTitle:"새 연결 만들기"); alert.addButton(withTitle:"취소")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do { let key=try KeyStore.replace(); explorer.connectionEnded(); files.cancel(); photos.configure(identity:key);inbox.configure(identity:key);engine?.replaceKey(key); keyHex=key.map{String(format:"%02x",$0)}.joined(); name="연결된 휴대폰 없음";model="";system="";connectionIssue="";pairing=true;tab=0;UserDefaults.standard.removeObject(forKey:"peerName");UserDefaults.standard.removeObject(forKey:"peerModel") } catch { status="연결 키 저장 실패" }
+        do { let key=try KeyStore.replace(); explorer.connectionEnded(); files.cancel(); photos.configure(identity:key);engine?.replaceKey(key); keyHex=key.map{String(format:"%02x",$0)}.joined(); name="연결된 휴대폰 없음";model="";system="";connectionIssue="";pairing=true;tab=0;UserDefaults.standard.removeObject(forKey:"peerName");UserDefaults.standard.removeObject(forKey:"peerModel") } catch { status="연결 키 저장 실패" }
     }
 }
 
@@ -103,7 +61,6 @@ struct CoolDashboard:View {
     @ObservedObject private var photos:PhotosModel
     @AppStorage("appearance") private var appearance="system"
     @AppStorage("showDockIcon") private var showDockIcon=true
-    @AppStorage("hideSensitiveMessages") private var hideSensitiveMessages=true
     init(model:DashboardModel){self.model=model;self.photos=model.photos}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
@@ -116,7 +73,6 @@ struct CoolDashboard:View {
                         Section("CoolSync") {
                             Label("연결",systemImage:"link").tag("connection")
                             Label("클립보드",systemImage:"clipboard").tag("clipboard")
-                            Label("메시지",systemImage:"bubble.left.and.bubble.right").tag("messages")
                             Label("사진첩",systemImage:"photo.on.rectangle").tag("photos")
                         }
                         if model.tab==4 {
@@ -146,25 +102,23 @@ struct CoolDashboard:View {
                     HStack { Image(systemName:model.connecting ? "antenna.radiowaves.left.and.right":"wifi.exclamationmark");Text(model.tab==4 ? "Mac에 저장된 사진은 계속 볼 수 있습니다. 휴대폰 연결 후 변경분과 삭제 대기를 반영합니다.":(model.connectionIssue.isEmpty ? model.status:model.connectionIssue)).lineLimit(2);Spacer();Button("연결하기"){model.tab=0} }.font(.callout).padding(12).background(.thinMaterial)
                     Divider()
                 }
-            Group{if model.tab==5{MessagesPane(inbox:model.inbox)}else if model.tab==4{PhotosPane(photos:model.photos,files:model.files,exit:{model.tab=0},trash:{model.tab=1;model.explorer.showTrash()})}else if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
+            Group{if model.tab==4{PhotosPane(photos:model.photos,files:model.files,exit:{model.tab=0},trash:{model.tab=1;model.explorer.showTrash()})}else if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
             }
         }.background(Color(nsColor:.windowBackgroundColor)).tint(.accentColor)
         .preferredColorScheme(appearance=="light" ? .light:appearance=="dark" ? .dark:nil)
         .onAppear{applyAppearance()}.onChange(of:appearance){_ in applyAppearance()}
-        .onChange(of:hideSensitiveMessages){hidden in if hidden && model.engine != nil{UNUserNotificationCenter.current().getDeliveredNotifications{items in let ids=items.filter{$0.request.content.userInfo["kind"]as?String=="phoneNotification"}.map{$0.request.identifier};UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers:ids)}}}
         .animation(reduceMotion ? nil:.easeInOut(duration:0.2),value:model.tab).frame(minWidth:900,minHeight:560)
         .alert("연결 확인",isPresented:$model.showConnectionIssue){Button("다시 연결"){model.engine?.reconnect()};Button("닫기",role:.cancel){}}message:{Text((model.connectionIssue.isEmpty ? model.status:model.connectionIssue)+"\n\n휴대폰에서 CoolSync의 연결을 시작하고 주변 기기 권한을 허용하세요. 두 기기의 Bluetooth를 켜고, 인증이 실패하면 현재 QR을 다시 스캔하세요.")}
     }
     private var sidebarSelection:Binding<String?> {
         Binding(get:{
-            if model.tab==5{return "messages"};if model.tab==0{return "connection"};if model.tab==3{return "clipboard"};if model.tab==4{if !photos.album.isEmpty{return "album:"+photos.album};return photos.scope=="all" ? "photos":"photo:"+photos.scope};if model.tab==2{return "settings"}
+            if model.tab==0{return "connection"};if model.tab==3{return "clipboard"};if model.tab==4{if !photos.album.isEmpty{return "album:"+photos.album};return photos.scope=="all" ? "photos":"photo:"+photos.scope};if model.tab==2{return "settings"}
             return model.explorer.trashMode ? "trash":"folder:"+model.explorer.path
         },set:{ value in
             guard let value else { return }
             switch value {
             case "connection":model.tab=0
             case "clipboard":model.tab=3
-            case "messages":model.tab=5
             case "photos":photos.choose();model.tab=4
             case "settings":model.tab=2
             case "trash":model.tab=1;model.explorer.showTrash()
@@ -220,13 +174,11 @@ struct CoolDashboard:View {
         Form{
             Section("화면 모드"){Picker("앱 테마",selection:$appearance){Text("시스템 설정").tag("system");Text("라이트").tag("light");Text("다크").tag("dark")}.pickerStyle(.segmented);Text("모든 화면과 대화상자에 같은 테마를 적용합니다.").foregroundStyle(.secondary)}
             Section("Dock"){Toggle("Dock에 CoolSync 표시",isOn:$showDockIcon).onChange(of:showDockIcon){value in NSApp.setActivationPolicy(value ? .regular:.accessory)};Text("꺼도 메뉴 막대에서 CoolSync를 열 수 있습니다.").foregroundStyle(.secondary)}
-            Section("메시지"){Toggle("민감한 내용 숨기기",isOn:$hideSensitiveMessages);Text("알림함은 이 Mac에 최대 500개 저장합니다. 숨기면 민감한 본문과 인증번호를 화면·Mac 알림에서 가립니다. 휴대폰이 이미 가린 내용은 복원할 수 없습니다.").foregroundStyle(.secondary);Button("문자·앱 알림함 열기"){model.tab=5}}
             PhotoCacheSettings(photos:photos)
             Section("연결"){LabeledContent("휴대폰",value:model.name);LabeledContent("모델",value:model.model);Button("공유 시작 / 중지"){model.engine?.toggle()};Button("다른 휴대폰 연결"){model.reset()};Button("연결 QR 보기"){model.pairing=true;model.tab=0}}
             Section("파일 탐색"){Text("휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용해야 합니다.");Text("파일과 폴더는 내부 저장소에서 관리합니다. 다른 앱의 전용 데이터와 시스템 보호 폴더는 접근할 수 없습니다.").foregroundStyle(.secondary)}
             Section("클립보드"){Toggle("복사 기록 저장",isOn:Binding(get:{model.history.enabled},set:{model.history.enabled=$0}));Text("이 기기에 최대 200개를 저장합니다. 민감한 내용 표시는 존중합니다. 이미지 한 장은 같은 로컬 네트워크에서 공유합니다.").foregroundStyle(.secondary)}
             Section("앱 업데이트"){Button("업데이트 확인…"){MacUpdates.shared.check()};Text("새 업데이트를 자동 확인합니다. 다운로드 및 설치 방식은 업데이트 창에서 변경할 수 있습니다.").foregroundStyle(.secondary)}
-            Section("알림"){LabeledContent("클립보드",value:"배너 없이 반영");LabeledContent("파일 작업",value:"진행 상태 표시");Toggle("휴대폰 알림 표시",isOn:Binding(get:{UserDefaults.standard.object(forKey:"phoneNotifications") as? Bool ?? true},set:{UserDefaults.standard.set($0,forKey:"phoneNotifications")}));Text("휴대폰 설정에서 알림 공유와 알림 접근 권한을 허용하세요.").foregroundStyle(.secondary);LabeledContent("최근 알림 처리",value:model.notificationStatus);if !model.notificationPermissionIssue.isEmpty { Label(model.notificationPermissionIssue,systemImage:"exclamationmark.bubble").foregroundStyle(.orange) };Button("Mac 알림 설정 열기"){if let url=URL(string:"x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleId=app.coolsync.mac"){NSWorkspace.shared.open(url)}}}
             Section{Text("CoolSync 0.3.0 · 빌드 " + (Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "—")).foregroundStyle(.secondary)}
         }.formStyle(.grouped).frame(maxWidth:.infinity)
     }
@@ -342,13 +294,10 @@ final class AppDelegate:NSObject,NSApplicationDelegate,UNUserNotificationCenterD
         window.title="CoolSync"; window.titlebarAppearsTransparent=true; window.isReleasedWhenClosed=false; window.minSize=NSSize(width:900,height:560)
         window.contentViewController=NSHostingController(rootView:CoolDashboard(model:model)); window.center(); show()
         if !CommandLine.arguments.contains("--preview"){MacUpdates.shared.start()}
-        let copyCode=UNNotificationAction(identifier:"copyVerificationCode",title:"인증번호 복사",options:[])
-        UNUserNotificationCenter.current().setNotificationCategories([UNNotificationCategory(identifier:"phoneCode",actions:[copyCode],intentIdentifiers:[],options:[])])
         UNUserNotificationCenter.current().delegate=self
         NotificationCenter.default.addObserver(self,selector:#selector(incoming(_:)),name:.init("CoolSyncIncomingFile"),object:nil)
     }
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool{show();return true}
-    func applicationDidBecomeActive(_ notification:Notification) { model?.refreshNotificationPermission() }
     @objc private func checkUpdate(){MacUpdates.shared.check()}
     @objc private func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
     @objc private func quit() { model.files.cancel(); model.engine?.shutdown(); NSApp.terminate(nil) }
@@ -371,14 +320,6 @@ final class AppDelegate:NSObject,NSApplicationDelegate,UNUserNotificationCenterD
         }
     }
     func userNotificationCenter(_ center:UNUserNotificationCenter,willPresent notification:UNNotification,withCompletionHandler completionHandler:@escaping(UNNotificationPresentationOptions)->Void) { completionHandler([.banner,.list,.sound]) }
-    func userNotificationCenter(_ center:UNUserNotificationCenter,didReceive response:UNNotificationResponse,withCompletionHandler completionHandler:@escaping()->Void) {
-        DispatchQueue.main.async{[weak self]in
-            guard let self else{completionHandler();return}
-            if response.actionIdentifier=="copyVerificationCode",!(UserDefaults.standard.object(forKey:"hideSensitiveMessages")as?Bool ?? true),let code=response.notification.request.content.userInfo["code"]as?String{MessageCodes.copy(code);completionHandler();return}
-            self.model.tab=response.notification.request.content.userInfo["kind"]as?String=="phoneNotification" ? 5:1
-            self.model.inbox.selection=self.model.inbox.items.first{$0.id==response.notification.request.content.userInfo["entryID"]as?String}?.thread
-            self.show();completionHandler()
-        }
-    }
+    func userNotificationCenter(_ center:UNUserNotificationCenter,didReceive response:UNNotificationResponse,withCompletionHandler completionHandler:@escaping()->Void) { DispatchQueue.main.async{[weak self]in self?.model.tab=1;self?.show();completionHandler()} }
     func applicationWillTerminate(_ notification:Notification) { model.files.cancel(); model.engine?.shutdown() }
 }

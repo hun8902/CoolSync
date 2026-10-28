@@ -27,10 +27,6 @@ class SyncService : Service() {
     private var subscribed = false
     private var pendingHello:JSONObject?=null
     private var handshakeAck=""
-    var notificationResult="아직 테스트하지 않았습니다";private set
-    private val notificationIconsSent=HashSet<String>()
-    private var testNotificationID=""
-    private val notificationTimeout=Runnable{if(testNotificationID.isNotEmpty()){testNotificationID="";notificationResult="Mac의 알림 수신 확인이 없습니다. 연결 상태를 확인하세요";update(notificationResult)}}
     private var handshakeStage = "Bluetooth 연결"
     @Volatile var authenticated = false; private set
     var connecting=false;private set
@@ -168,25 +164,6 @@ class SyncService : Service() {
     fun sendControl(type: String, text: String = "", ref: String = "") {
         main.post { if(authenticated) send(Protocol.message(type,text,ref)) }
     }
-    fun sendPhoneNotification(packageName:String,app:String,title:String,body:String,icon:String){main.post{
-        if(!authenticated)return@post
-        val payload=JSONObject().put("package",packageName).put("app",app).put("title",title).put("body",body)
-        if(icon.isNotEmpty() && notificationIconsSent.add(packageName))payload.put("icon",icon)
-        send(Protocol.message("phoneNotification",payload.toString()))
-    }}
-    fun sendInboxEntry(row:JSONObject){main.post{
-        if(!authenticated)return@post
-        if(!MessageInbox.allowed(this,row))return@post
-        val payload=MessageInbox.shared(this,row);val packageName=payload.optString("package")
-        if(payload.has("icon")&&!notificationIconsSent.add(packageName))payload.remove("icon")
-        send(Protocol.message("phoneNotification",payload.toString()))
-    }}
-    private val inboxWorker=java.util.concurrent.Executors.newSingleThreadExecutor()
-    fun testNotification(){main.post{
-        if(!authenticated)return@post
-        val text=JSONObject().put("app","CoolSync").put("title","푸시 알림 테스트").put("body","휴대폰에서 보낸 테스트 알림입니다.").toString()
-        val m=Protocol.message("phoneNotification",text);testNotificationID=m.getString("id");notificationResult="Mac 알림 수신 확인 중…";main.removeCallbacks(notificationTimeout);main.postDelayed(notificationTimeout,20000);send(m);update(notificationResult)
-    }}
     private fun receive(bytes: ByteArray) {
         for(b in bytes) {
             if(b == 10.toByte()) {
@@ -215,19 +192,6 @@ class SyncService : Service() {
             send(Protocol.message("readyAck",ref=id));update("Mac 연결됨 · 복사 대기");return
         }
         if(!authenticated) return
-        if(type=="notificationHistory"){
-            val request=runCatching{JSONObject(m.optString("text"))}.getOrDefault(JSONObject())
-            val sessionKey=Protocol.key(this)?.clone()
-            inboxWorker.execute{
-                val page=runCatching{MessageInbox.page(this,request.optInt("offset"))}.getOrElse{JSONObject().put("error","알림함을 읽지 못했습니다")}
-                main.post{if(authenticated && sessionKey!=null && sessionKey.contentEquals(Protocol.key(this) ?: byteArrayOf()))send(Protocol.message("notificationHistoryPage",page.toString(),id))}
-            };return
-        }
-        if(type=="notificationAck"){
-            notificationResult=m.optString("text","Mac 알림 처리 결과 없음")
-            if(m.optString("ref")==testNotificationID){testNotificationID="";main.removeCallbacks(notificationTimeout)}
-            update(notificationResult);return
-        }
         if(type=="fsRequest") { StorageBridge.handle(this,m); return }
         if(type.startsWith("file")) { FilesBridge.handle(this,m); return }
         if(type == "ack" && m.optString("ref") == pending?.optString("id")) {
@@ -293,7 +257,7 @@ class SyncService : Service() {
         GalleryServer.close()
         peer = null; authenticated = false;connecting=false; subscribed = false; pendingHello=null;handshakeAck=""; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null
-        notificationIconsSent.clear();main.removeCallbacks(ackTimeout); main.removeCallbacks(linkTimeout); main.removeCallbacks(sendTimeout);main.removeCallbacks(notificationTimeout);if(testNotificationID.isNotEmpty()){testNotificationID="";notificationResult="연결이 끊겨 테스트를 완료하지 못했습니다"}
+        main.removeCallbacks(ackTimeout);main.removeCallbacks(linkTimeout);main.removeCallbacks(sendTimeout)
     }
     private fun closeBle() {
         bleGeneration++

@@ -70,3 +70,9 @@ Added album/media RPCs, on-demand encrypted Wi-Fi thumbnails, a macOS Photos-sty
 - READ_SMS, RECEIVE_SMS, RECEIVE_SENSITIVE_NOTIFICATIONS 매니페스트 선언과 SmsReceiver, 문자 직접 수신·기존 문자 가져오기·권한 요청 UI 제거.
 - Android 소스에 SMS 조회·수신 API가 없는 것을 검사하고, 생성 APK의 권한 덤프에서도 문자 권한이 없는 것을 확인. 매니페스트 권한 집합은 build-1040과 동일.
 - Mac·Android 로컬 빌드 통과. 앱 알림함, 민감 내용 숨김, 알림의 인증번호 복사와 Dock 옵션은 유지. 실제 Galaxy 설치 성공 여부는 별도 확인이 필요함.
+
+## 2026-10-28 메시지 기능 전체 제거
+
+- Android 문자·앱 알림 수집/전달/저장 코드, NotificationListenerService 선언, 알림 접근 안내와 인증번호 관련 옵션 제거.
+- Mac 메시지 메뉴·화면·저장소·프로토콜 수신·인증번호 알림 액션·관련 설정 제거. Dock 표시 옵션 유지.
+- 소스 및 매니페스트에서 관련 서비스와 메시지 경로가 남지 않은 것을 확인. 설치 차단 우회나 보안 설정 변경은 하지 않음.

@@ -64,8 +64,6 @@ enum KeyStore {
 final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var changed: ((String)->Void)?
     var mediaChanged:(()->Void)?
-    var phoneNotification: (([String:String],@escaping(String)->Void)->Void)?
-    var notificationHistory:(([String:Any])->Void)?
     var fileMessage: ((Wire.Message)->Void)?
     var imageCopied:((URL,Int64)->Void)?
     var filesystemMessage: ((Wire.Message)->Void)?
@@ -277,16 +275,6 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         if m.type=="readyAck",!readyID.isEmpty,m.ref==readyID {readyID="";completeConnection();return}
         guard authenticated else { return }
         if m.type=="mediaChanged" {mediaChanged?();return}
-        if m.type=="phoneNotification" {
-            guard let data=m.text.data(using:.utf8),let value=try?JSONSerialization.jsonObject(with:data) as? [String:String] else{return}
-            let token=session
-            var row=value;row["eventID"]=row["eventID"] ?? m.id
-            phoneNotification?(row){[weak self]result in
-                DispatchQueue.main.async { guard let self,self.session==token,self.authenticated else{return};var ack=Wire.Message(type:"notificationAck");ack.ref=m.id;ack.text=result;self.send(ack) }
-            }
-            return
-        }
-        if m.type=="notificationHistoryPage",let data=m.text.data(using:.utf8),let page=try?JSONSerialization.jsonObject(with:data)as?[String:Any]{notificationHistory?(page);return}
         if m.type=="fsResponse" { filesystemMessage?(m); return }
         if m.type.hasPrefix("file") { fileMessage?(m); return }
         if m.type == "ack", m.ref == pending?.id {
