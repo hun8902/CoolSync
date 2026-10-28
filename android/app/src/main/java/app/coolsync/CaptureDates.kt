@@ -26,6 +26,11 @@ object CaptureDates {
   values!!.put(key,JSONObject().put("time",result.time).put("source",result.source));dirty=true
   return result
  }
+ @Synchronized fun rememberOriginal(c:Context,file:File,mime:String,time:Long){
+  read(c,file,mime)
+  val key=MessageDigest.getInstance("SHA-256").digest("${file.path}|${file.length()}|${file.lastModified()}".toByteArray()).joinToString(""){"%02x".format(it)}
+  values!!.put(key,JSONObject().put("time",time).put("source",if(mime.startsWith("video/"))"video"else "exif"));dirty=true
+ }
  private fun parse(text:String,pattern:String,zone:TimeZone):Long {
   val format=SimpleDateFormat(pattern,Locale.US);format.isLenient=false;format.timeZone=zone
   val position=ParsePosition(0);val date=format.parse(text,position)

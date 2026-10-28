@@ -5,6 +5,7 @@ import CryptoKit
 import AVKit
 import MapKit
 import UniformTypeIdentifiers
+import ImageIO
 
 struct PhotoItem:Codable,Identifiable,Equatable {
     let id:String;let path:String;let name:String;let album:String;let mime:String;let size:Int64;let date:Int64;let modified:Int64;let width:Int;let height:Int;let duration:Int64;var favorite:Bool;let generation:Int64?;let added:Int64?;let dateSource:String?
@@ -99,6 +100,7 @@ final class PhotosModel:ObservableObject {
     @Published var moving=false
     @Published private(set) var pendingDeletes:[PendingPhotoDelete]=[]
     @Published var showPendingDeletes=false
+    @Published private(set) var infoStatus=""
     @Published private(set) var photoSyncActivity=""
     @Published private(set) var deleteCompleted=0
     @Published private(set) var deleteActivity=""
@@ -301,13 +303,43 @@ final class PhotosModel:ObservableObject {
     }
     func select(_ paths:Set<String>){selection=paths;if infoShown{loadInfo()}}
     func loadInfo(){
-        let generation=UUID();infoGeneration=generation;info=[:];latitude=nil;longitude=nil
+        let generation=UUID();infoGeneration=generation;info=[:];infoStatus="촬영정보 확인 중…";latitude=nil;longitude=nil
         guard let item=selected.first,selected.count==1 else{return}
-        if let values=disk?.details(item){applyInfo(values)}
-        guard connected?()==true else{return}
-        rpc?.callPhoto("mediaInfo",["path":item.path]){[weak self]r in guard let self,self.infoGeneration==generation,let values=r["info"]as?[String:Any]else{return};let strings=values.mapValues{String(describing:$0)};self.disk?.putDetails(strings,item);self.applyInfo(strings)}
+        if let values=disk?.details(item),values["infoSchema"]=="2"{applyInfo(values)}
+        if let url=disk?.original(item){readLocalInfo(item,url:url,generation:generation)}else{infoStatus="휴대폰 원본 정보 확인 중 · Mac 원본 확인 전"}
+        guard connected?()==true else{if disk?.original(item)==nil{infoStatus="오프라인 · 원본 촬영정보 확인 전"};return}
+        rpc?.callPhoto("mediaInfo",["path":item.path]){[weak self]response in
+            guard let self,self.infoGeneration==generation else{return}
+            guard let values=response["info"]as?[String:Any]else{self.infoStatus=response["error"]as?String ?? "휴대폰 원본 촬영정보 조회 실패";return}
+            var strings=values.mapValues{String(describing:$0)};strings["infoSchema"]="2"
+            self.applyInfo(strings)
+            if let url=self.disk?.original(item){self.readLocalInfo(item,url:url,generation:generation)}else{self.infoStatus=strings["metadataError"] ?? "휴대폰 촬영정보 확인됨 · Mac 원본 확인 전";self.disk?.putDetails(self.info,item)}
+        }
     }
-    private func applyInfo(_ values:[String:String]){info=values;latitude=values["latitude"].flatMap(Double.init);longitude=values["longitude"].flatMap(Double.init);if let a=latitude,let b=longitude{region.center=CLLocationCoordinate2D(latitude:a,longitude:b)}}
+    private func applyInfo(_ values:[String:String]){
+        info.merge(values,uniquingKeysWith:{_,new in new})
+        if info["locationAllowed"]=="false" || info["locationAllowed"]=="0"{info.removeValue(forKey:"latitude");info.removeValue(forKey:"longitude")}
+        latitude=info["latitude"].flatMap(Double.init);longitude=info["longitude"].flatMap(Double.init)
+        if let a=latitude,let b=longitude{region.center=CLLocationCoordinate2D(latitude:a,longitude:b)}
+    }
+    private func readLocalInfo(_ item:PhotoItem,url:URL,generation:UUID){
+        guard infoGeneration==generation else{return}
+        if item.video{
+            Task{ @MainActor [weak self] in
+                guard let self else{return}
+                do{let time=try await self.captureTimeFromOriginal(url,video:true);guard self.infoGeneration==generation else{return};if let time{self.applyInfo(["captured":Date(timeIntervalSince1970:Double(time)/1000).formatted(),"infoSchema":"2"])};self.infoStatus=time==nil ? "동영상 원본 확인됨 · 내부 촬영일 정보 없음":"동영상 원본 촬영정보 확인됨";self.disk?.putDetails(self.info,item)}catch{guard self.infoGeneration==generation else{return};self.infoStatus="동영상 원본 정보 읽기 실패: \(error.localizedDescription)"}
+            };return
+        }
+        guard let source=CGImageSourceCreateWithURL(url as CFURL,nil),let properties=CGImageSourceCopyPropertiesAtIndex(source,0,nil)as?[String:Any]else{infoStatus="원본 이미지 메타데이터 읽기 실패";return}
+        let exif=properties[kCGImagePropertyExifDictionary as String]as?[String:Any] ?? [:]
+        let tiff=properties[kCGImagePropertyTIFFDictionary as String]as?[String:Any] ?? [:]
+        var values:[String:String]=["infoSchema":"2"]
+        for(target,key)in [("captured","DateTimeOriginal"),("lens","LensModel"),("iso","ISOSpeedRatings"),("exposure","ExposureTime"),("aperture","FNumber"),("focalLength","FocalLength")]{if let value=exif[key]{values[target]=(value as? [Any])?.map{String(describing:$0)}.joined(separator:", ") ?? String(describing:value)}}
+        for(target,key)in [("make","Make"),("camera","Model")]{if let value=tiff[key]{values[target]=String(describing:value)}}
+        if info["locationAllowed"] != "false" && info["locationAllowed"] != "0",let gps=properties[kCGImagePropertyGPSDictionary as String]as?[String:Any],let lat=gps["Latitude"]as?Double,let lon=gps["Longitude"]as?Double{values["latitude"]=String(gps["LatitudeRef"]as?String=="S" ? -lat:lat);values["longitude"]=String(gps["LongitudeRef"]as?String=="W" ? -lon:lon)}
+        applyInfo(values);disk?.putDetails(info,item)
+        infoStatus=values.count>1 ? "Mac 실제 원본에서 촬영정보 확인됨":"Mac 실제 원본 확인됨 · 촬영일·카메라 정보 없음"
+    }
     func toggleInfo(){infoShown.toggle();if infoShown{loadInfo()}}
     func alignModifiedDates(_ target:String="selected",retryPaths:Set<String>=[]){
         let catalog=disk?.catalog.items ?? []
@@ -315,7 +347,7 @@ final class PhotosModel:ObservableObject {
         switch target{case "all":source=catalog;case "album":source=catalog.filter{$0.album==album};case "retry":source=catalog.filter{retryPaths.contains($0.path)};default:source=selected}
         let values=source.filter{$0.mime.hasPrefix("image/") || $0.video};guard !values.isEmpty else{error="대상 사진·동영상이 없습니다";return}
         guard connected?()==true,!caching,!moving,!loading else{error="휴대폰 연결 후 진행 중인 사진 작업을 마치세요";return}
-        let alert=NSAlert();alert.messageText="사진·동영상 \(values.count)개의 파일 수정일을 맞출까요?";alert.informativeText="사진은 원본 EXIF 촬영일, 동영상은 원본 내부 촬영일·생성일을 직접 새로 읽고 \(values.count)개 항목을 처리합니다. Mac 원본 다운로드는 필요하지 않습니다. 휴대폰 파일의 수정일을 바꾸며 사진·영상 내용과 내부 메타데이터는 유지합니다. 이전 수정일은 휴대폰 앱에 기록합니다.";alert.addButton(withTitle:"수정일 맞추기");alert.addButton(withTitle:"취소")
+        let alert=NSAlert();alert.messageText="사진·동영상 \(values.count)개의 파일 수정일을 맞출까요?";alert.informativeText="사진은 원본 EXIF 촬영일, 동영상은 원본 내부 촬영일·생성일을 직접 새로 읽고 \(values.count)개 항목을 처리합니다. 휴대폰에서 촬영일을 확인하지 못한 항목은 Mac으로 실제 원본을 받아 추가 확인합니다. 휴대폰 파일의 수정일을 바꾸며 사진·영상 내용과 내부 메타데이터는 유지합니다. 이전 수정일은 휴대폰 앱에 기록합니다.";alert.addButton(withTitle:"수정일 맞추기");alert.addButton(withTitle:"취소")
         if alert.runModal() == .alertFirstButtonReturn{closePreview();loading=true;dateWorkActive=true;dateWorkToken=UUID();dateWorkStopped=false;dateWorkTotal=values.count;dateWorkProgress=0;dateWorkFailures=[];dateWorkNotes=[];dateRetry=[];alignDateBatch(values,updated:0,skipped:0,failed:0)}
     }
     private func alignDateBatch(_ values:[PhotoItem],updated:Int,skipped:Int,failed:Int){
@@ -332,6 +364,8 @@ final class PhotosModel:ObservableObject {
         rpc?.callPhoto("mediaAlignDates",["items":rows]){[weak self]r in
             guard let self,self.disk===disk,self.dateWorkToken==workToken else{return}
             guard r["ok"]as?Bool==true,let results=r["results"]as?[[String:Any]]else{self.loading=false;self.dateWorkActive=false;self.dateRetry.append(contentsOf:values);self.error=r["error"]as?String ?? "파일 수정일을 정리하지 못했습니다. 다시 시도할 수 있습니다";return}
+            self.resolveDateOriginals(results,items:selected,token:workToken){results in
+            guard self.disk===disk,self.dateWorkToken==workToken else{return}
             var changed=0,ignored=0,errors=0;var catalog=disk.catalog
             for result in results{
                 if result["status"]as?String=="updated"{changed+=1}else if result["status"]as?String=="failed"{errors+=1;if let path=result["path"]as?String,let item=selected.first(where:{$0.path==path}){self.dateRetry.append(item);self.dateWorkFailures.append("\(item.name): \(result["error"]as?String ?? "처리 실패")")}}else{ignored+=1;if let path=result["path"]as?String,let item=selected.first(where:{$0.path==path}){self.dateWorkNotes.append("\(item.name): \(result["reason"]as?String ?? "건너뜀")")}}
@@ -339,7 +373,43 @@ final class PhotosModel:ObservableObject {
             }
             do{try disk.commit(catalog)}catch{self.loading=false;self.dateWorkActive=false;self.error="휴대폰 날짜는 처리됐지만 Mac 캐시 기록을 갱신하지 못했습니다";return}
             self.alignDateBatch(Array(values.dropFirst(selected.count)),updated:updated+changed,skipped:skipped+ignored,failed:failed+errors)
+            }
         }
+    }
+    private func resolveDateOriginals(_ results:[[String:Any]],items:[PhotoItem],token:UUID,done:@escaping([[String:Any]])->Void){
+        guard token==dateWorkToken,let disk else{return}
+        guard let index=results.firstIndex(where:{$0["status"]as?String=="needsOriginal"}),let path=results[index]["path"]as?String,let item=items.first(where:{$0.path==path})else{done(results);return}
+        if dateWorkStopped{var output=results;for i in output.indices where output[i]["status"]as?String=="needsOriginal"{output[i]["status"]="failed";output[i]["error"]="원본 촬영정보 확인 전 중단됨"};done(output);return}
+        status="썸네일 원본 촬영정보 확인 중 · \(item.name)"
+        func complete(_ row:[String:Any]){disk.prune();self.refreshCacheUsage();var output=results;output[index]=row;self.resolveDateOriginals(output,items:items,token:token,done:done)}
+        func read(_ url:URL,current:PhotoItem){
+            Task{ @MainActor [weak self] in
+                guard let self,self.dateWorkToken==token,self.disk===disk else{return}
+                let timestamp:Int64?
+                do{timestamp=try await self.captureTimeFromOriginal(url,video:current.video)}catch{complete(["path":path,"status":"failed","error":"실제 원본 메타데이터 읽기 실패: \(error.localizedDescription)"]);return}
+                guard self.dateWorkToken==token,self.disk===disk else{return}
+                guard let timestamp else{complete(["path":path,"status":"skipped","reason":"실제 원본 다운로드·메타데이터 확인 후에도 촬영일이 없습니다"]);return}
+                let row:[String:Any]=["id":current.id,"path":current.path,"size":current.size,"modified":current.modified,"generation":current.generation ?? 0,"originalCaptureTime":timestamp,"captureSource":"mac-original","originalChecked":true]
+                self.rpc?.callPhoto("mediaAlignDates",["items":[row]]){response in
+                    guard self.dateWorkToken==token,self.disk===disk else{return}
+                    if let rows=response["results"]as?[[String:Any]],let row=rows.first{complete(row)}else{complete(["path":path,"status":"failed","error":response["error"]as?String ?? "원본 확인 후 수정일 반영 실패"])}
+                }
+            }
+        }
+        if let url=disk.original(item){read(url,current:item);return}
+        guard item.size<=disk.budget else{complete(["path":path,"status":"failed","error":"원본 확인에 필요한 파일이 Mac 캐시 한도를 초과합니다"]);return}
+        originals.download(item,to:disk.originalURL(item),owner:"date-info"){[weak self]result in
+            guard let self,self.dateWorkToken==token,self.disk===disk else{return}
+            switch result{case .success(let receipt):read(receipt.url,current:receipt.item);case .failure(let error):complete(["path":path,"status":"failed","error":"원본 촬영정보 확인 실패: \(error.localizedDescription)"])}
+        }
+    }
+    private func captureTimeFromOriginal(_ url:URL,video:Bool)async throws->Int64?{
+        if video{let asset=AVURLAsset(url:url);if let value=try await asset.load(.creationDate),let date=try await value.load(.dateValue),date.timeIntervalSince1970>0{return Int64(date.timeIntervalSince1970*1000)};return nil}
+        guard let source=CGImageSourceCreateWithURL(url as CFURL,nil),let properties=CGImageSourceCopyPropertiesAtIndex(source,0,nil)as?[String:Any]else{throw NSError(domain:"CoolSync",code:1,userInfo:[NSLocalizedDescriptionKey:"원본 이미지 메타데이터를 해석하지 못했습니다"])}
+        guard let exif=properties[kCGImagePropertyExifDictionary as String]as?[String:Any],let text=exif[kCGImagePropertyExifDateTimeOriginal as String]as?String else{return nil}
+        let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.isLenient=false;formatter.dateFormat="yyyy:MM:dd HH:mm:ss"
+        if let offset=exif["OffsetTimeOriginal"]as?String{formatter.timeZone=TimeZone(identifier:"GMT"+offset)}
+        guard let date=formatter.date(from:text),date.timeIntervalSince1970>0 else{return nil};return Int64(date.timeIntervalSince1970*1000)
     }
     func favorite(){guard !selection.isEmpty else{return};mutate("mediaFavorite",["paths":Array(selection),"value":!selected.allSatisfy{$0.favorite}])}
     private func mutate(_ op:String,_ fields:[String:Any],done:(([String:Any])->Void)?=nil){loading=true;status="사진 작업 중…";rpc?.callPhoto(op,fields){[weak self]r in guard let self else{return};self.loading=false;if r["ok"]as?Bool==true{done?(r);self.thumbnails.clear();self.reload()}else{self.error=r["error"]as?String ?? "사진 작업을 완료하지 못했습니다"}}}
@@ -477,6 +547,7 @@ final class PhotosModel:ObservableObject {
     }
 
     private func show(_ item:PhotoItem,url:URL){
+        if infoShown{readLocalInfo(item,url:url,generation:infoGeneration)}
         previewLoading=false;let generation=previewGeneration
         if item.video{
             let asset=AVURLAsset(url:url)

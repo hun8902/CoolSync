@@ -88,7 +88,8 @@ object GalleryMedia {
      val exif=ExifInterface(f.path)
      for((key,tag)in listOf("make" to ExifInterface.TAG_MAKE,"camera" to ExifInterface.TAG_MODEL,"lens" to ExifInterface.TAG_LENS_MODEL,"iso" to ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,"exposure" to ExifInterface.TAG_EXPOSURE_TIME,"aperture" to ExifInterface.TAG_F_NUMBER,"focalLength" to ExifInterface.TAG_FOCAL_LENGTH,"captured" to ExifInterface.TAG_DATETIME_ORIGINAL,"orientation" to ExifInterface.TAG_ORIENTATION))exif.getAttribute(tag)?.let{info.put(key,it)}
      if(info.optBoolean("locationAllowed"))exif.latLong?.let{info.put("latitude",it[0]).put("longitude",it[1])}
-    }
+    }.onFailure{info.put("metadataError",it.message ?: "원본 EXIF를 읽지 못했습니다")}
+    info.put("metadataChecked",true)
     out.put("info",info)
    }
    "mediaFavorite"->{val set=favorites(c).toMutableSet();val paths=paths(q);for(p in paths){file(c,p);if(q.optBoolean("value"))set.add(p)else set.remove(p)};prefs(c).edit().putStringSet("favorites",set).commit()}
@@ -118,9 +119,11 @@ object GalleryMedia {
     val item=current[path] ?: throw StorageFault("missing","사진 또는 동영상을 찾지 못했습니다")
     if(item.id.toString()!=expected.getString("id")||item.size!=expected.getLong("size")||item.modified!=expected.getLong("modified"))throw StorageFault("conflict","사진 정보가 변경되었습니다. 먼저 동기화하세요")
     val file=file(c,path);val beforeSize=file.length();val beforeModified=file.lastModified()
-    val capture=CaptureDates.read(c,file,item.mime,fresh=true)
+    val nativeCapture=CaptureDates.read(c,file,item.mime,fresh=true)
+    val fallback=expected.optLong("originalCaptureTime",0)
+    val capture=if(nativeCapture.time>0)nativeCapture else if(expected.optString("captureSource")=="mac-original" && fallback in 1..253402300799999L)CaptureDates.Result(fallback,if(item.mime.startsWith("video/"))"video"else "exif")else nativeCapture
     if(file.length()!=beforeSize||file.lastModified()!=beforeModified)throw StorageFault("conflict","원본 촬영일을 읽는 중 파일이 변경되었습니다")
-    if(capture.source !in setOf("exif","video")||capture.time<=0){row.put("status","skipped").put("reason",if(item.mime.startsWith("video/"))"동영상 원본에 유효한 내부 촬영일·생성일 메타데이터가 없습니다"else "사진 원본에 유효한 EXIF 촬영일(DateTimeOriginal)이 없습니다")}
+    if(capture.source !in setOf("exif","video")||capture.time<=0){row.put("status",if(expected.optBoolean("originalChecked"))"skipped"else "needsOriginal").put("reason",if(item.mime.startsWith("video/"))"동영상 원본에 유효한 내부 촬영일·생성일 메타데이터가 없습니다"else "사진 원본에 유효한 EXIF 촬영일(DateTimeOriginal)이 없습니다")}
     else if(file.lastModified()/1000==capture.time/1000){row.put("status","unchanged").put("reason","이미 원본 촬영일과 같은 수정일입니다")}
     else{
      if(file.length()!=item.size||file.lastModified()/1000!=item.modified/1000)throw StorageFault("conflict","파일이 변경되어 날짜를 수정하지 않았습니다")
@@ -129,6 +132,7 @@ object GalleryMedia {
      if(file.lastModified()/1000!=capture.time/1000)throw StorageFault("write","저장소가 수정일 변경을 반영하지 않았습니다")
      changed.add(path);row.put("status","updated").put("captureTime",capture.time).put("previousModified",beforeModified).put("actualModified",file.lastModified()).put("source",if(capture.source=="video")"original-video"else "original-exif")
     }
+    if(nativeCapture.time<=0 && capture.time>0)CaptureDates.rememberOriginal(c,file,item.mime,capture.time)
    }catch(e:Exception){row.put("status","failed").put("error",e.message ?: "수정일을 변경하지 못했습니다")}
    result.put(row)
   }
