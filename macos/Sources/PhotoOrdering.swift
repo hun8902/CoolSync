@@ -2,8 +2,13 @@ import Foundation
 
 enum PhotoOrdering{
     static func filenameDate(_ name:String)->Int64?{
-        guard name.range(of:#"^[0-9]{8}_[0-9]{6}(?:\([0-9]+\))?\.[^.]+$"#,options:.regularExpression) != nil else{return nil}
-        let stamp=String(name.prefix(15)).replacingOccurrences(of:"_",with:"")
+        let patterns=[#"^(?:IMG_|VID_|PXL_|Screenshot_)?([0-9]{8})[_-]([0-9]{6})(?:[_.(][^/]*)?\.[^.]+$"#,#"^(?:Screen_Recording_|ScreenRecording_|screen_recording_)([0-9]{4})-([0-9]{2})-([0-9]{2})[-_]([0-9]{2})[-_]([0-9]{2})[-_]([0-9]{2})(?:[_.(][^/]*)?\.[^.]+$"#]
+        var stamp:String?
+        for pattern in patterns{
+            guard let regex=try?NSRegularExpression(pattern:pattern,options:.caseInsensitive),let match=regex.firstMatch(in:name,range:NSRange(name.startIndex...,in:name))else{continue}
+            stamp=(1..<match.numberOfRanges).compactMap{Range(match.range(at:$0),in:name).map{String(name[$0])}}.joined();break
+        }
+        guard let stamp else{return nil}
         let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.calendar=Calendar(identifier:.gregorian);formatter.timeZone = .current;formatter.dateFormat="yyyyMMddHHmmss";formatter.isLenient=false
         guard let date=formatter.date(from:stamp),formatter.string(from:date)==stamp else{return nil}
         return Int64((date.timeIntervalSince1970*1000).rounded())

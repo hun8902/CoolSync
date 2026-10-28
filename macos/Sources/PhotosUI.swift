@@ -92,12 +92,6 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
             Picker("정렬 기준",selection:$photos.sortKey){Text("파일명").tag("name");Text("생성일").tag("captured");Text("추가일").tag("added")}
             Picker("정렬 방향",selection:$photos.ascending){Text(photos.sortKey=="name" ? "내림차순":"최신순").tag(false);Text(photos.sortKey=="name" ? "오름차순":"오래된순").tag(true)}
             Divider();Button("캐시된 사진 촬영정보 전체 다시 불러오기"){photos.refreshAllCachedInfo()}.disabled(photos.bulkInfoActive)
-            Menu("원본 촬영일로 파일 수정일 맞추기"){
-                Button("선택한 사진·동영상…"){photos.alignModifiedDates()}.disabled(photos.selection.isEmpty)
-                Button("현재 앨범 전체…"){photos.alignModifiedDates("album")}.disabled(photos.album.isEmpty)
-                Button("사진·동영상 보관함 전체…"){photos.alignModifiedDates("all")}
-                Button("실패·중단 항목 재시도…"){photos.retryDateWork()}
-            }.disabled(photos.loading || photos.caching || photos.moving)
         }
     }
     private var range:String{if photos.sortKey=="name"{return "\(photos.filtered.count)개"};let valid=photos.items.filter{photos.orderTime($0)>0};guard let first=valid.first,let last=valid.last else{return photos.loading ? "불러오는 중…":"날짜 없음"};let dates=[photos.orderDate(first),photos.orderDate(last)].sorted();return dates[0].formatted(date:.numeric,time:.omitted)+" – "+dates[1].formatted(date:.numeric,time:.omitted)}

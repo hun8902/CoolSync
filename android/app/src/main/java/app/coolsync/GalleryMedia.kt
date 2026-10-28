@@ -70,7 +70,7 @@ object GalleryMedia {
   when(q.getString("op")){
    "mediaSync"->GallerySync.sync(c,q,out)
    "mediaTrashChecked"->GallerySync.trash(c,q,out)
-   "mediaAlignDates"->alignDates(c,q,out)
+   "mediaAlignDates"->throw StorageFault("disabled","원본 파일 날짜 변경은 중단했습니다. 사진 목록의 정렬 날짜만 사용합니다")
    "mediaSession"->out.put("endpoint",GalleryServer.open(c as SyncService))
    "mediaClose"->GalleryServer.close()
    "mediaAlbums"->{
@@ -135,36 +135,6 @@ object GalleryMedia {
   c.contentResolver.query(MediaStore.Files.getContentUri("external"),arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.MediaColumns.GENERATION_MODIFIED),"_data=? AND is_trashed=0",arrayOf(file.path),null)?.use{cursor->if(!cursor.moveToFirst()||cursor.getLong(0).toString()!=id)throw StorageFault("missing","사진 식별자가 변경되었습니다");generation=cursor.getLong(1)}
   val current=known.copy(size=file.length(),modified=(file.lastModified()/1000)*1000,generation=generation)
   CaptureDates.flush(c);return current.json(favorites(c))
- }
- private fun alignDates(c:Context,q:JSONObject,out:JSONObject){
-  val requested=q.getJSONArray("items");if(requested.length() !in 1..20)throw StorageFault("selection","한 번에 20개 이하를 선택하세요")
-  invalidate();val current=items(c).associateBy{it.path};val result=JSONArray();val changed=mutableListOf<String>();val history=c.getSharedPreferences("capture-date-history",0)
-  for(i in 0 until requested.length()){
-   val expected=requested.getJSONObject(i);val path=expected.getString("path");val row=JSONObject().put("path",path)
-   try{
-    val item=current[path] ?: throw StorageFault("missing","사진 또는 동영상을 찾지 못했습니다")
-    if(item.id.toString()!=expected.getString("id")||item.size!=expected.getLong("size")||item.modified!=expected.getLong("modified"))throw StorageFault("conflict","사진 정보가 변경되었습니다. 먼저 동기화하세요")
-    val file=file(c,path);val beforeSize=file.length();val beforeModified=file.lastModified()
-    val nativeCapture=CaptureDates.read(c,file,item.mime,fresh=true)
-    val fallback=expected.optLong("originalCaptureTime",0)
-    val capture=if(nativeCapture.time>0)nativeCapture else if(expected.optString("captureSource")=="mac-original" && fallback in 1..253402300799999L)CaptureDates.Result(fallback,if(item.mime.startsWith("video/"))"video"else "exif")else nativeCapture
-    if(file.length()!=beforeSize||file.lastModified()!=beforeModified)throw StorageFault("conflict","원본 촬영일을 읽는 중 파일이 변경되었습니다")
-    if(capture.source !in setOf("exif","video")||capture.time<=0){row.put("status",if(expected.optBoolean("originalChecked"))"skipped"else "needsOriginal").put("reason",if(item.mime.startsWith("video/"))"동영상 원본에 유효한 내부 촬영일·생성일 메타데이터가 없습니다"else "사진 원본에 유효한 EXIF 촬영일(DateTimeOriginal)이 없습니다")}
-    else if(file.lastModified()/1000==capture.time/1000){row.put("status","unchanged").put("reason","이미 원본 촬영일과 같은 수정일입니다")}
-    else{
-     if(file.length()!=item.size||file.lastModified()/1000!=item.modified/1000)throw StorageFault("conflict","파일이 변경되어 날짜를 수정하지 않았습니다")
-     if(!history.contains(path))history.edit().putLong(path,file.lastModified()).commit()
-     if(!file.setLastModified(capture.time))throw StorageFault("write","파일 수정일을 바꾸지 못했습니다")
-     if(file.lastModified()/1000!=capture.time/1000)throw StorageFault("write","저장소가 수정일 변경을 반영하지 않았습니다")
-     changed.add(path);row.put("status","updated").put("captureTime",capture.time).put("previousModified",beforeModified).put("actualModified",file.lastModified()).put("source",if(capture.source=="video")"original-video"else "original-exif")
-    }
-    if(nativeCapture.time<=0 && capture.time>0)CaptureDates.rememberOriginal(c,file,item.mime,capture.time)
-   }catch(e:Exception){row.put("status","failed").put("error",e.message ?: "수정일을 변경하지 못했습니다")}
-   result.put(row)
-  }
-  CaptureDates.flush(c);rescan(c,changed);invalidate();val after=items(c).associateBy{it.path};val favorite=favorites(c)
-  for(i in 0 until result.length()){val row=result.getJSONObject(i);if(row.optString("status") in setOf("updated","unchanged"))after[row.getString("path")]?.let{row.put("item",it.json(favorite))}}
-  out.put("results",result)
  }
  private fun paths(q:JSONObject):List<String>{val array=q.getJSONArray("paths");if(array.length()>500)throw StorageFault("size","한 번에 500개 이하를 선택하세요");return(0 until array.length()).map{array.getString(it)}}
  fun thumbnail(c:Context,path:String):ByteArray{
