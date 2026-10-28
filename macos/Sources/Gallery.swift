@@ -219,12 +219,21 @@ final class PhotosModel:ObservableObject {
         }
     }
     func timelineTime(_ item:PhotoItem)->Int64{
-        if item.date>0 && ["exif","video","captured"].contains(item.dateSource ?? ""){return item.date}
-        return PhotoOrdering.filenameDate(item.name) ?? libraryDates[item.cacheIdentity] ?? 0
+        if item.date>0 && ["exif","video","captured","created","modified","added"].contains(item.dateSource ?? ""){return item.date}
+        return PhotoOrdering.filenameDate(item.name) ?? (item.modified>0 ? item.modified : (item.added ?? 0))
     }
     func orderTime(_ item:PhotoItem)->Int64{scope=="recent" || sortKey=="added" ? (item.added.flatMap{$0>0 ? $0:nil} ?? 0):timelineTime(item)}
     func orderDate(_ item:PhotoItem)->Date{Date(timeIntervalSince1970:Double(orderTime(item))/1000)}
-    func dateSourceTitle(_ item:PhotoItem)->String{if item.date<=0 && libraryDates[item.cacheIdentity] != nil{return "사진 보관함 원본 날짜"};if timelineTime(item) != item.date || item.dateSource=="filename"{return "파일명 날짜"};return ["exif":"원본 촬영일 (EXIF)","video":"영상 내부 촬영일","captured":"기기 제공 촬영일","added":"추가일 · 원본 촬영일 없음","modified":"수정일 · 원본 촬영일 없음","unknown":"날짜 없음"][item.dateSource ?? ""] ?? "기존 목록 날짜"}
+    func dateSourceTitle(_ item:PhotoItem)->String{
+        if item.date>0 && ["exif","video","captured","created","modified","added"].contains(item.dateSource ?? ""){
+            return ["exif":"원본 촬영일 (EXIF)","video":"영상 내부 촬영일","captured":"기기 제공 촬영일","created":"파일 생성일","modified":"파일 수정일","added":"휴대폰 추가일"][item.dateSource ?? ""] ?? "파일 날짜"
+        }
+        if PhotoOrdering.filenameDate(item.name) != nil{return "파일명 날짜"}
+        if item.modified>0{return "파일 수정일"}
+        if (item.added ?? 0)>0{return "휴대폰 추가일"}
+        return "날짜 조회 필요"
+    }
+
     var sections:[PhotoSection]{
         let rows=filtered;guard grouping != "all" && sortKey != "name"else{return[PhotoSection(title:"",items:rows)]}
         let formatter=DateFormatter();formatter.dateFormat=grouping=="year" ? "yyyy년":grouping=="day" ? "yyyy년 M월 d일":"yyyy년 M월"
@@ -242,7 +251,7 @@ final class PhotosModel:ObservableObject {
         disk=PhotoLibraryCache(identity:identity);if let disk,let data=try?Data(contentsOf:disk.folder.appendingPathComponent("library-dates.json")),let dates=try?JSONDecoder().decode([String:Int64].self,from:data){libraryDates=dates};thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true };thumbnails.activity={ [weak self] pending,completed,failures in self?.thumbnailPending=pending;self?.thumbnailCompleted=completed;self?.thumbnailFailures=failures }
         originals.thumbnails=thumbnails;originals.cacheTarget={ [weak self] item in self?.disk?.originalURL(item) };originals.key={ [weak self] in self?.thumbnails.key?() ?? Data() };originals.progress={ [weak self] owner,value in guard let self else{return};self.originalProgress=value;if owner=="preview"{self.previewPhase="원본을 가져오는 중 · \(Int(value*100))%"}}
         pendingDeletes=disk?.pending ?? [];deleteCompleted=0;deleteActivity="";photoSyncActivity="";loading=false;caching=false;deletingIDs=[]
-        albums=disk?.catalog.albums ?? [];applyView();refreshCacheUsage();refreshLibraryDates()
+        albums=disk?.catalog.albums ?? [];applyView();refreshCacheUsage()
     }
     func retryThumbnails(){thumbnails.close(closeRemote:false);thumbnails.clear();applyView()}
     func appear(){visible=true;applyView();reload()}
@@ -351,7 +360,6 @@ final class PhotosModel:ObservableObject {
                     if !messages.isEmpty{self.photoSyncActivity=messages.joined(separator:" · ")+" · Mac 자동 반영 완료"}
                 }
                 self.loading=false;self.applyView();self.status += value.dateSchema==7 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 사진 날짜 정렬이 적용됩니다";self.refreshCacheUsage()
-                self.refreshLibraryDates()
                 if let reopen{self.open(reopen)}
                 if self.infoShown{self.loadInfo()};self.processPendingDeletes();self.refreshEditedOriginals();self.processBulkInfo()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}

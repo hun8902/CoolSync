@@ -14,6 +14,8 @@ import android.util.Base64
 import androidx.exifinterface.media.ExifInterface
 import org.json.*
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -47,11 +49,11 @@ object GalleryMedia {
     val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
     val taken=long(6)
     val added=long(11)*1000;val modified=(file.lastModified()/1000)*1000
-    // Files.creationTime() may return mtime on Android; never label it as creation time.
+    val created=runCatching{Files.readAttributes(file.toPath(),BasicFileAttributes::class.java).creationTime().toMillis()}.getOrDefault(0L)
     val original=if(taken<=0)CaptureDates.read(c,file,mime)else CaptureDates.Result(0L,"")
     val namedDate=if(taken<=0 && original.time<=0)filenameDate(str(2))else 0L
-    val date=when{taken>0->taken;original.time>0->original.time;namedDate>0->namedDate;else->0L}
-    val source=when{taken>0->"captured";original.time>0->original.source;namedDate>0->"filename";else->"unknown"}
+    val date=when{taken>0->taken;original.time>0->original.time;namedDate>0->namedDate;created>0->created;modified>0->modified;else->added}
+    val source=when{taken>0->"captured";original.time>0->original.source;namedDate>0->"filename";created>0->"created";modified>0->"modified";added>0->"added";else->"unknown"}
     result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),date,modified,long(7).toInt(),long(8).toInt(),long(9),long(10),added,source))
    }
   }
