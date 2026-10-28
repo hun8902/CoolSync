@@ -99,6 +99,7 @@ final class PhotosModel:ObservableObject {
     @Published var moving=false
     @Published private(set) var pendingDeletes:[PendingPhotoDelete]=[]
     @Published var showPendingDeletes=false
+    @Published private(set) var photoSyncActivity=""
     @Published private(set) var deleteCompleted=0
     @Published private(set) var deleteActivity=""
     var deleteInFlight:Bool{!deletingIDs.isEmpty}
@@ -164,7 +165,7 @@ final class PhotosModel:ObservableObject {
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();originals.cancelAll();thumbnails.close();thumbnails.clear();closePreview()
         disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true }
         originals.thumbnails=thumbnails;originals.cacheTarget={ [weak self] item in self?.disk?.originalURL(item) };originals.key={ [weak self] in self?.thumbnails.key?() ?? Data() };originals.progress={ [weak self] owner,value in guard let self else{return};self.originalProgress=value;if owner=="preview"{self.previewPhase="원본을 가져오는 중 · \(Int(value*100))%"}}
-        pendingDeletes=disk?.pending ?? [];deleteCompleted=0;deleteActivity="";loading=false;caching=false;deletingIDs=[]
+        pendingDeletes=disk?.pending ?? [];deleteCompleted=0;deleteActivity="";photoSyncActivity="";loading=false;caching=false;deletingIDs=[]
         albums=disk?.catalog.albums ?? [];applyView();refreshCacheUsage()
     }
     func appear(){visible=true;applyView();reload()}
@@ -221,6 +222,8 @@ final class PhotosModel:ObservableObject {
             value.synced=Date();value.dateSchema=r["dateSchema"]as?Int
             do{
                 let old=disk.catalog.items
+                let oldIDs=Set(old.map{$0.id});let additions=value.items.filter{!oldIDs.contains($0.id)}.count
+                let previouslySynced=disk.catalog.synced != nil
                 let obsolete=old.filter{rows[$0.id]?.cacheIdentity != $0.cacheIdentity}
                 if !obsolete.isEmpty{
                     let identities=Set(obsolete.map{$0.cacheIdentity})
@@ -231,6 +234,7 @@ final class PhotosModel:ObservableObject {
                 // Keep the old revision until cleanup succeeds so reconnect can retry it.
                 for item in obsolete{try disk.discard(item,trashOriginal:rows[item.id]==nil)}
                 try disk.commit(value)
+                if previouslySynced && additions>0{self.photoSyncActivity="사진 추가·복원 \(additions)개 · Mac 사진첩 자동 반영 완료"}
                 self.loading=false;self.applyView();self.status += value.dateSchema==3 ? (changes+events.count==0 ? " · 변경 없음":" · 변경분 \(changes+events.count)개 반영"):" · 휴대폰 앱도 업데이트해야 원본 촬영일을 표시할 수 있습니다";self.refreshCacheUsage()
                 if self.infoShown{self.loadInfo()};self.processPendingDeletes()
                 if self.refreshQueued && self.deletingIDs.isEmpty{self.refreshQueued=false;self.reload()}

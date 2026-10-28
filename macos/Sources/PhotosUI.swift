@@ -16,6 +16,7 @@ struct PhotosPane:View {
         HStack(spacing:0){
             if photos.sidebarShown{sidebar.frame(width:215).background(.ultraThinMaterial);Divider()}
             VStack(spacing:0){toolbar;Divider();
+                if !photos.photoSyncActivity.isEmpty{HStack{Image(systemName:"arrow.triangle.2.circlepath");Text(photos.photoSyncActivity);Spacer()}.font(.caption).padding(10).background(.bar)}
                 if !photos.pendingDeletes.isEmpty || !photos.deleteActivity.isEmpty{HStack(spacing:10){if photos.deleteInFlight{ProgressView().controlSize(.small)}else{Image(systemName:photos.pendingDeletes.isEmpty ? "checkmark.circle.fill":"clock")};Text(photos.deleteActivity.isEmpty ? "연결되면 삭제 대기를 자동 처리합니다":photos.deleteActivity);Spacer();Button("삭제 상태"){photos.showPendingDeletes=true}}.font(.caption).padding(10).background(.bar)}
 
                 if photos.dateWorkActive{HStack{ProgressView(value:photos.dateWorkProgress).frame(width:140);Text(photos.status).font(.caption);Spacer();Button("중단"){photos.stopDateWork()}}.padding(10)}

@@ -110,7 +110,12 @@ class SyncService : Service() {
         super.onCreate()
         if(checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return }
         active = this
-        runCatching{contentResolver.registerContentObserver(android.provider.MediaStore.Files.getContentUri("external"),true,mediaObserver)}
+        // Gallery restore notifications can use image/video or per-volume URIs.
+        val mediaVolumes=runCatching{android.provider.MediaStore.getExternalVolumeNames(this)}.getOrDefault(emptySet())+"external"
+        for(volume in mediaVolumes){
+            val uris=listOf(android.provider.MediaStore.Files.getContentUri(volume),android.provider.MediaStore.Images.Media.getContentUri(volume),android.provider.MediaStore.Video.Media.getContentUri(volume))
+            for(uri in uris)runCatching{contentResolver.registerContentObserver(uri,true,mediaObserver)}
+        }
         seen.addAll(prefs.getStringSet("seen",emptySet()) ?: emptySet())
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("sync","CoolSync 연결",NotificationManager.IMPORTANCE_LOW))
