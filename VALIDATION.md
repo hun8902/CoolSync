@@ -55,3 +55,12 @@ Mac 앱은 개인용 ad-hoc 서명이며 Apple 공증은 받지 않았다. Andro
 ## Photo gallery implementation
 
 Added album/media RPCs, on-demand encrypted Wi-Fi thumbnails, a macOS Photos-style grid and inspector, local original-file preview/video playback, multi-selection and bidirectional drag/export. User requested build and deployment only; no new runtime, device, screenshot or scenario tests were performed for this gallery revision. Android and macOS compiler results and GitHub release state are reported separately.
+
+## 2026-10-28 메시지 수신함 / Dock
+
+- 기존 원본 저장소에서 Mac 빌드·코드 서명 검증, Android assembleDebug 통과.
+- `tests/message-inbox-tests.swift`: 인증번호 추출, 민감 내용·제목·검색 가림, SMS 중복 제거, 500개 제한, 파일 저장/재읽기, 연결별 분리, 페이지 동기화 통과.
+- 실제 SwiftUI 렌더링으로 메시지 라이트/다크·선택 목록·말풍선·인증번호 버튼·숨김 화면 확인. 실제 사용자 메시지는 사용하지 않음.
+- 읽기 전용 Pixel_10_Pro 에뮬레이터에서 설치·실행, 문서의 appops 추가 허용 명령, 가상 SMS 인증번호 수신과 앱 알림 수신, Android 알림함 진입 및 복사 버튼 표시 확인. AndroidRuntime 크래시 없음.
+- 별도 macOS 테스트 프로세스에서 regular/accessory 활성화 정책 전환 통과. 실행 중인 사용자 앱의 정책은 변경하지 않음.
+- 실제 Fold의 SMS/OTP 권한·수신, 실제 두 기기 BLE 알림함 동기화와 Mac 시스템 알림 액션은 아직 확인하지 않음. MMS/RCS 과거 대화 가져오기와 문자 전송은 포함하지 않음.

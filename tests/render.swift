@@ -24,4 +24,13 @@ save("mac-files")
 model.tab=2;save("mac-settings")
 model.history.add(text:"회의 일정은 오후 3시입니다.",source:"Mac");model.history.add(text:"https://github.com/hun8902/CoolSync",source:"휴대폰");model.history.favorite(model.history.entries[0].id);model.clipboardState.selection=model.history.entries[0].id;model.tab=3;save("mac-clipboard")
 app.appearance=NSAppearance(named:.darkAqua);host.rootView=AnyView(CoolDashboard(model:model).environment(\.controlActiveState,.active).environment(\.colorScheme,.dark));save("mac-clipboard-dark")
+
+UserDefaults.standard.set(false,forKey:"hideSensitiveMessages")
+model.inbox.receive(["eventID":"preview-1","kind":"sms","package":"sms","app":"문자 메시지","title":"CoolSync 테스트","body":"인증번호 482913 입니다. 다른 사람에게 알려주지 마세요.","thread":"sms:preview","postedAt":String(Int64(Date().timeIntervalSince1970*1000)),"sensitive":"true"])
+model.inbox.receive(["eventID":"preview-2","kind":"sms","package":"sms","app":"문자 메시지","title":"CoolSync 테스트","body":"연결 테스트를 완료했습니다.","thread":"sms:preview","postedAt":String(Int64(Date().addingTimeInterval(-120).timeIntervalSince1970*1000)),"outgoing":"true"])
+model.inbox.receive(["eventID":"preview-3","kind":"app","package":"test.calendar","app":"캘린더","title":"회의 안내","body":"오후 3시에 회의가 시작됩니다.","thread":"calendar","postedAt":String(Int64(Date().addingTimeInterval(-60).timeIntervalSince1970*1000))])
+model.inbox.selection="sms:preview";model.tab=5
+app.appearance=NSAppearance(named:.aqua);host.rootView=AnyView(CoolDashboard(model:model).environment(\.controlActiveState,.active).environment(\.colorScheme,.light));save("mac-messages")
+app.appearance=NSAppearance(named:.darkAqua);host.rootView=AnyView(CoolDashboard(model:model).environment(\.controlActiveState,.active).environment(\.colorScheme,.dark));save("mac-messages-dark")
+UserDefaults.standard.set(true,forKey:"hideSensitiveMessages");save("mac-messages-hidden")
 print("Native SwiftUI screenshots saved (preview data, no Bluetooth or keychain access)")

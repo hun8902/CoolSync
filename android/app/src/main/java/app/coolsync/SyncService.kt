@@ -174,6 +174,14 @@ class SyncService : Service() {
         if(icon.isNotEmpty() && notificationIconsSent.add(packageName))payload.put("icon",icon)
         send(Protocol.message("phoneNotification",payload.toString()))
     }}
+    fun sendInboxEntry(row:JSONObject){main.post{
+        if(!authenticated)return@post
+        if(!MessageInbox.allowed(this,row))return@post
+        val payload=MessageInbox.shared(this,row);val packageName=payload.optString("package")
+        if(payload.has("icon")&&!notificationIconsSent.add(packageName))payload.remove("icon")
+        send(Protocol.message("phoneNotification",payload.toString()))
+    }}
+    private val inboxWorker=java.util.concurrent.Executors.newSingleThreadExecutor()
     fun testNotification(){main.post{
         if(!authenticated)return@post
         val text=JSONObject().put("app","CoolSync").put("title","푸시 알림 테스트").put("body","휴대폰에서 보낸 테스트 알림입니다.").toString()
@@ -207,6 +215,14 @@ class SyncService : Service() {
             send(Protocol.message("readyAck",ref=id));update("Mac 연결됨 · 복사 대기");return
         }
         if(!authenticated) return
+        if(type=="notificationHistory"){
+            val request=runCatching{JSONObject(m.optString("text"))}.getOrDefault(JSONObject())
+            val sessionKey=Protocol.key(this)?.clone()
+            inboxWorker.execute{
+                val page=runCatching{MessageInbox.page(this,request.optInt("offset"))}.getOrElse{JSONObject().put("error","알림함을 읽지 못했습니다")}
+                main.post{if(authenticated && sessionKey!=null && sessionKey.contentEquals(Protocol.key(this) ?: byteArrayOf()))send(Protocol.message("notificationHistoryPage",page.toString(),id))}
+            };return
+        }
         if(type=="notificationAck"){
             notificationResult=m.optString("text","Mac 알림 처리 결과 없음")
             if(m.optString("ref")==testNotificationID){testNotificationID="";main.removeCallbacks(notificationTimeout)}

@@ -5,14 +5,14 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import org.json.JSONObject
 
-/** Event-driven forwarding. No history, polling, or notification-content logging. */
+/** Event-driven forwarding. Bounded local inbox; no polling or notification-content logging. */
 class PhoneNotifications : NotificationListenerService() {
     private val icons = android.util.LruCache<String,String>(32)
     private val recent = LinkedHashMap<String, String>()
     override fun onNotificationPosted(item: StatusBarNotification?) {
         item ?: return
-        val sync = SyncService.active ?: return
-        if (!getSharedPreferences("sync", 0).getBoolean("forwardNotifications", false) || !sync.authenticated || item.packageName == packageName) return
+        val sync = SyncService.active
+        if (!getSharedPreferences("sync", 0).getBoolean("forwardNotifications", false) || item.packageName == packageName) return
         // Notification access and the sharing toggle authorize forwarding even while locked.
         val notification = item.notification
         if (notification.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_GROUP_SUMMARY) != 0) return
@@ -25,7 +25,10 @@ class PhoneNotifications : NotificationListenerService() {
         while (recent.size > 100) recent.remove(recent.keys.first())
         val app = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(item.packageName, 0)).toString() }.getOrDefault(item.packageName)
         val icon=icons.get(item.packageName) ?: appIcon(item.packageName).also{icons.put(item.packageName,it)}
-        sync.sendPhoneNotification(item.packageName,app.take(100),title,text,icon)
+        val smsApp=item.packageName==android.provider.Telephony.Sms.getDefaultSmsPackage(this)
+        val row=JSONObject().put("eventID","notification:${item.key}:${item.postTime}").put("kind",if(smsApp)"sms"else"app").put("package",item.packageName).put("app",app.take(100)).put("title",title).put("body",text).put("thread",if(smsApp)"sms:$title"else item.packageName+":"+title).put("postedAt",item.postTime.toString()).put("sensitive",(notification.visibility!=Notification.VISIBILITY_PUBLIC || MessageInbox.code(title+" "+text)!=null).toString())
+        MessageInbox.capture(this,row,live=false)
+        sync?.sendInboxEntry(MessageInbox.shared(this,row).put("icon",icon))
     }
     private fun appIcon(packageName:String):String = runCatching {
         val drawable=packageManager.getApplicationIcon(packageName)

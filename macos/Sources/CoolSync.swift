@@ -64,7 +64,8 @@ enum KeyStore {
 final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var changed: ((String)->Void)?
     var mediaChanged:(()->Void)?
-    var phoneNotification: ((String,String,String,String,String,@escaping(String)->Void)->Void)?
+    var phoneNotification: (([String:String],@escaping(String)->Void)->Void)?
+    var notificationHistory:(([String:Any])->Void)?
     var fileMessage: ((Wire.Message)->Void)?
     var imageCopied:((URL,Int64)->Void)?
     var filesystemMessage: ((Wire.Message)->Void)?
@@ -279,11 +280,13 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         if m.type=="phoneNotification" {
             guard let data=m.text.data(using:.utf8),let value=try?JSONSerialization.jsonObject(with:data) as? [String:String] else{return}
             let token=session
-            phoneNotification?(String((value["app"] ?? "휴대폰").prefix(100)),String((value["title"] ?? "").prefix(160)),String((value["body"] ?? "").prefix(1200)),String((value["package"] ?? value["app"] ?? "phone").prefix(200)),String((value["icon"] ?? "").prefix(6000))){[weak self]result in
+            var row=value;row["eventID"]=row["eventID"] ?? m.id
+            phoneNotification?(row){[weak self]result in
                 DispatchQueue.main.async { guard let self,self.session==token,self.authenticated else{return};var ack=Wire.Message(type:"notificationAck");ack.ref=m.id;ack.text=result;self.send(ack) }
             }
             return
         }
+        if m.type=="notificationHistoryPage",let data=m.text.data(using:.utf8),let page=try?JSONSerialization.jsonObject(with:data)as?[String:Any]{notificationHistory?(page);return}
         if m.type=="fsResponse" { filesystemMessage?(m); return }
         if m.type.hasPrefix("file") { fileMessage?(m); return }
         if m.type == "ack", m.ref == pending?.id {
