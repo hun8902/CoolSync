@@ -116,6 +116,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
                 Text(photos.info["captured"] ?? (item.date>0 ? item.timestamp.formatted():"날짜 없음")).font(.system(size:12)).foregroundStyle(.secondary);Text(photos.info["captured"] == nil ? photos.dateSourceTitle(item):"원본 촬영정보").font(.caption).foregroundStyle(.secondary);if let added=item.added,added>0{Text("추가일 · "+Date(timeIntervalSince1970:Double(added)/1000).formatted()).font(.caption).foregroundStyle(.secondary)}
                 HStack{Text("\(item.width) × \(item.height)");Spacer();Text(ByteCountFormatter.string(fromByteCount:item.size,countStyle:.file))}.font(.system(size:11)).foregroundStyle(.secondary)
                 Divider()
+                HStack{Button("휴대폰 원본에서 다시 조회"){photos.refreshInfoOriginal()}.disabled(photos.infoRefreshing || photos.connected?()==false);if photos.infoRefreshing{ProgressView().controlSize(.small)}}
                 Text(photos.infoStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                 ForEach([("make","제조사"),("camera","카메라"),("lens","렌즈"),("iso","ISO"),("aperture","조리개"),("exposure","노출 시간"),("focalLength","초점 거리"),("captured","촬영 일시"),("codec","형식")],id:\.0){key,title in if let value=photos.info[key],!value.isEmpty{VStack(alignment:.leading,spacing:4){Text(title).font(.system(size:10)).foregroundStyle(.secondary);Text(value).font(.system(size:12)).textSelection(.enabled)}}}
                 if item.video{Text("재생 시간 \(item.durationText)").font(.system(size:12))}

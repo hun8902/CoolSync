@@ -101,6 +101,8 @@ final class PhotosModel:ObservableObject {
     @Published private(set) var pendingDeletes:[PendingPhotoDelete]=[]
     @Published var showPendingDeletes=false
     @Published private(set) var infoStatus=""
+    @Published private(set) var infoRefreshing=false
+    private var infoFetchToken=UUID()
     @Published private(set) var photoSyncActivity=""
     @Published private(set) var deleteCompleted=0
     @Published private(set) var deleteActivity=""
@@ -301,19 +303,42 @@ final class PhotosModel:ObservableObject {
             }catch{self.loading=false;self.error="Mac 캐시 저장 또는 정리를 완료하지 못했습니다: \(error.localizedDescription)";self.applyView()}
         }
     }
-    func select(_ paths:Set<String>){selection=paths;if infoShown{loadInfo()}}
+    func select(_ paths:Set<String>){guard selection != paths else{return};selection=paths;if infoShown{loadInfo()}}
     func loadInfo(){
-        let generation=UUID();infoGeneration=generation;info=[:];infoStatus="촬영정보 확인 중…";latitude=nil;longitude=nil
+        let generation=UUID();infoGeneration=generation;infoFetchToken=UUID();infoRefreshing=false;originals.cancel(owner:"info-refresh");info=[:];infoStatus="촬영정보 확인 중…";latitude=nil;longitude=nil
         guard let item=selected.first,selected.count==1 else{return}
-        if let values=disk?.details(item),values["infoSchema"]=="2"{applyInfo(values)}
+        if let values=disk?.details(item),hasCaptureInfo(values){applyInfo(values)}
         if let url=disk?.original(item){readLocalInfo(item,url:url,generation:generation)}else{infoStatus="휴대폰 원본 정보 확인 중 · Mac 원본 확인 전"}
         guard connected?()==true else{if disk?.original(item)==nil{infoStatus="오프라인 · 원본 촬영정보 확인 전"};return}
         rpc?.callPhoto("mediaInfo",["path":item.path]){[weak self]response in
             guard let self,self.infoGeneration==generation else{return}
-            guard let values=response["info"]as?[String:Any]else{self.infoStatus=response["error"]as?String ?? "휴대폰 원본 촬영정보 조회 실패";return}
+            guard let values=response["info"]as?[String:Any]else{self.infoStatus=response["error"]as?String ?? "휴대폰 원본 촬영정보 조회 실패";if !self.hasCaptureInfo(self.info){self.fetchInfoOriginal(item,generation:generation)};return}
             var strings=values.mapValues{String(describing:$0)};strings["infoSchema"]="2"
             self.applyInfo(strings)
             if let url=self.disk?.original(item){self.readLocalInfo(item,url:url,generation:generation)}else{self.infoStatus=strings["metadataError"] ?? "휴대폰 촬영정보 확인됨 · Mac 원본 확인 전";self.disk?.putDetails(self.info,item)}
+            if !self.hasCaptureInfo(self.info){self.fetchInfoOriginal(item,generation:generation)}
+        }
+    }
+    private func hasCaptureInfo(_ values:[String:String])->Bool{["captured","camera","lens","make"].contains{!(values[$0] ?? "").isEmpty}}
+    func refreshInfoOriginal(){
+        guard let item=selected.first,selected.count==1 else{return}
+        infoGeneration=UUID();infoFetchToken=UUID();infoRefreshing=false;originals.cancel(owner:"info-refresh")
+        fetchInfoOriginal(item,generation:infoGeneration)
+    }
+    private func fetchInfoOriginal(_ item:PhotoItem,generation:UUID){
+        guard generation==infoGeneration,!infoRefreshing,connected?()==true,let disk else{return}
+        guard item.size<=disk.budget else{infoStatus="실제 원본 재조회에 필요한 캐시 용량이 부족합니다";return}
+        infoRefreshing=true;infoStatus="휴대폰 실제 원본을 다시 받아 촬영정보 확인 중…"
+        let token=UUID();infoFetchToken=token;let target=disk.originalURL(item);disk.protected.insert(target)
+        // Deliberately bypass both cached details and the cached original shortcut.
+        originals.download(item,to:target,owner:"info-refresh"){[weak self]result in
+            guard let self,self.disk===disk,self.infoGeneration==generation,self.infoFetchToken==token else{return}
+            self.infoRefreshing=false;disk.protected.remove(target)
+            switch result{
+            case .success(let receipt):
+                do{try self.rememberOriginal(receipt.item);let permission=self.info["locationAllowed"];self.info=permission.map{["locationAllowed":$0]} ?? [:];self.latitude=nil;self.longitude=nil;self.readLocalInfo(receipt.item,url:receipt.url,generation:generation);if self.preview?.id==item.id{self.preview=receipt.item;self.show(receipt.item,url:receipt.url)};disk.prune(excluding:[receipt.url]);self.refreshCacheUsage()}catch{self.infoStatus="원본 촬영정보 갱신 실패: \(error.localizedDescription)"}
+            case .failure(let error):self.infoStatus="실제 원본 재조회 실패: \(error.localizedDescription)"
+            }
         }
     }
     private func applyInfo(_ values:[String:String]){
@@ -592,6 +617,6 @@ final class PhotosModel:ObservableObject {
     }
     func canNavigatePreview(_ delta:Int)->Bool{guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path})else{return false};return filtered.indices.contains(i+delta)}
     func nextPreview(_ delta:Int){guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path}),filtered.indices.contains(i+delta)else{return};open(filtered[i+delta])}
-    func connectionEnded(){editedRefreshToken=UUID();editedRefreshActive=false;deleteRequestToken=UUID();if !pendingDeletes.isEmpty{deleteActivity="연결되면 남은 삭제를 자동 처리합니다"};if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
+    func connectionEnded(){infoFetchToken=UUID();infoRefreshing=false;editedRefreshToken=UUID();editedRefreshActive=false;deleteRequestToken=UUID();if !pendingDeletes.isEmpty{deleteActivity="연결되면 남은 삭제를 자동 처리합니다"};if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
     func imported(){changed()}
 }
