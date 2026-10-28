@@ -43,9 +43,10 @@ object GalleryMedia {
     val mime=str(3);if(!mime.startsWith("image/")&&!mime.startsWith("video/"))continue
     val taken=long(6)
     val added=long(11)*1000;val modified=(file.lastModified()/1000)*1000
-    val original=CaptureDates.read(c,file,mime)
-    val date=when{original.time>0->original.time;taken>0->taken;added>0->added;else->modified}
-    val source=when{original.time>0->original.source;taken>0->"captured";added>0->"added";modified>0->"modified";else->"unknown"}
+    // Android MediaStore standard chronology (INFERRED_DATE): DATE_TAKEN, otherwise DATE_MODIFIED.
+    // Listing must not consult or overwrite dates using cached EXIF or the import date.
+    val date=if(!cursor.isNull(6))taken else long(5)*1000
+    val source=if(!cursor.isNull(6))"captured" else if(long(5)>0)"modified" else "unknown"
     result.add(Item(long(0),path,str(2),path.substringBeforeLast('/',""),mime,long(4),date,modified,long(7).toInt(),long(8).toInt(),long(9),long(10),added,source))
    }
   }
@@ -75,7 +76,7 @@ object GalleryMedia {
    "mediaList"->{
     val favorite=favorites(c);val album=q.optString("album");val scope=q.optString("scope","all");val search=q.optString("search").lowercase()
     val rows=items(c).filter{(album.isEmpty()||it.album==album)&&(search.isEmpty()||it.name.lowercase().contains(search))&&when(scope){"videos"->it.mime.startsWith("video/");"favorites"->it.path in favorite;"screenshots"->it.album.contains("screenshot",true);else->true}}
-    val ordered=if(scope=="recent")rows.sortedByDescending{it.modified}else rows
+    val ordered=if(scope=="recent")rows.sortedWith(compareByDescending<Item>{it.added}.thenByDescending{it.id})else rows
     val start=q.optInt("offset").coerceIn(0,ordered.size);val page=ordered.drop(start).take(40)
     out.put("items",JSONArray(page.map{it.json(favorite)})).put("next",start+page.size).put("total",ordered.size)
    }
@@ -127,8 +128,7 @@ object GalleryMedia {
   val known=items(c).firstOrNull{it.path==path&&it.id.toString()==id} ?: throw StorageFault("missing","사진 또는 동영상을 찾지 못했습니다")
   var generation=known.generation
   c.contentResolver.query(MediaStore.Files.getContentUri("external"),arrayOf(MediaStore.Files.FileColumns._ID,MediaStore.MediaColumns.GENERATION_MODIFIED),"_data=? AND is_trashed=0",arrayOf(file.path),null)?.use{cursor->if(!cursor.moveToFirst()||cursor.getLong(0).toString()!=id)throw StorageFault("missing","사진 식별자가 변경되었습니다");generation=cursor.getLong(1)}
-  val capture=CaptureDates.read(c,file,known.mime)
-  val current=known.copy(size=file.length(),modified=(file.lastModified()/1000)*1000,generation=generation,date=if(capture.time>0)capture.time else known.date,dateSource=if(capture.time>0)capture.source else known.dateSource)
+  val current=known.copy(size=file.length(),modified=(file.lastModified()/1000)*1000,generation=generation)
   CaptureDates.flush(c);return current.json(favorites(c))
  }
  private fun alignDates(c:Context,q:JSONObject,out:JSONObject){

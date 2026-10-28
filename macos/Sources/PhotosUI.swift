@@ -55,7 +55,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
         HStack(spacing:14){Button{photos.sidebarShown.toggle()}label:{Image(systemName:"sidebar.left")};if photos.preview != nil{Button{photos.closePreview()}label:{Image(systemName:"chevron.left")}};VStack(alignment:.leading,spacing:3){Text(photos.title).font(.system(size:16,weight:.semibold)).lineLimit(1);Text(photos.sortTitle).font(.caption).foregroundStyle(.secondary)};Spacer()
             Button{photos.chooseImport()}label:{Image(systemName:"square.and.arrow.down")}
             Button{photos.toggleInfo()}label:{Image(systemName:"info.circle")}
-            Menu{sortCommands;Divider();Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")}.disabled(photos.sortKey=="name");Slider(value:$photos.zoom,in:90...240);Button("변경분 동기화"){photos.reload()};Button("선택 원본 보관"){photos.cacheSelection()};Button("삭제 대기 목록"){photos.showPendingDeletes=true};Button("Mac으로 복사…"){photos.export()};Button("Mac으로 이동…"){photos.export(move:true)};Button("즐겨찾기"){photos.favorite()};Button("휴지통으로 이동…"){photos.remove()};Button("새 앨범…"){photos.albumCreate()};Menu("앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}}}label:{Image(systemName:"ellipsis.circle")}
+            Menu{sortCommands;Divider();Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("일").tag("day");Text("모든 사진").tag("all")};Slider(value:$photos.zoom,in:90...240);Button("변경분 동기화"){photos.reload()};Button("선택 원본 보관"){photos.cacheSelection()};Button("삭제 대기 목록"){photos.showPendingDeletes=true};Button("Mac으로 복사…"){photos.export()};Button("Mac으로 이동…"){photos.export(move:true)};Button("즐겨찾기"){photos.favorite()};Button("휴지통으로 이동…"){photos.remove()};Button("새 앨범…"){photos.albumCreate()};Menu("앨범으로 이동"){ForEach(photos.albums){album in Button(album.name){photos.move(to:album.path)}}}}label:{Image(systemName:"ellipsis.circle")}
         }.buttonStyle(.borderless).padding(16).background(.ultraThinMaterial)
     }
     private var wideToolbar:some View{
@@ -66,7 +66,7 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
             if photos.preview==nil{
                 HStack(spacing:6){Image(systemName:"minus").font(.system(size:10));Slider(value:$photos.zoom,in:90...240).frame(width:70);Image(systemName:"plus").font(.system(size:10))}
                     .padding(9).background(.thinMaterial,in:Capsule())
-                Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("모든 사진").tag("all")}.disabled(photos.sortKey=="name").pickerStyle(.segmented).frame(width:180)
+                Picker("보기",selection:$photos.grouping){Text("년").tag("year");Text("월").tag("month");Text("일").tag("day");Text("모든 사진").tag("all")}.pickerStyle(.segmented).frame(width:230)
             }
             Spacer(minLength:4)
             HStack(spacing:13){Button{photos.chooseImport()}label:{Image(systemName:"square.and.arrow.down")}.help("Mac에서 사진·영상 가져오기")
@@ -118,7 +118,6 @@ HStack(spacing:0){ZStack{PhotoGrid(model:photos).opacity(photos.preview==nil ? 1
                 Text(photos.info["captured"] ?? (item.date>0 ? item.timestamp.formatted():"날짜 없음")).font(.system(size:12)).foregroundStyle(.secondary);Text(photos.info["captured"] == nil ? photos.dateSourceTitle(item):(photos.info["captureSource"]=="media-store" ? "휴대폰 갤러리 촬영일":"원본 촬영정보")).font(.caption).foregroundStyle(.secondary);if let added=item.added,added>0{Text("추가일 · "+Date(timeIntervalSince1970:Double(added)/1000).formatted()).font(.caption).foregroundStyle(.secondary)}
                 HStack{Text("\(item.width) × \(item.height)");Spacer();Text(ByteCountFormatter.string(fromByteCount:item.size,countStyle:.file))}.font(.system(size:11)).foregroundStyle(.secondary)
                 Divider()
-                HStack{Button("휴대폰 원본에서 다시 조회"){photos.refreshInfoOriginal()}.disabled(photos.infoRefreshing || photos.connected?()==false);if photos.infoRefreshing{ProgressView().controlSize(.small)}}
                 Text(photos.infoStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                 ForEach([("make","제조사"),("camera","카메라"),("lens","렌즈"),("iso","ISO"),("aperture","조리개"),("exposure","노출 시간"),("focalLength","초점 거리"),("captured","촬영 일시"),("codec","형식")],id:\.0){key,title in if let value=photos.info[key],!value.isEmpty{VStack(alignment:.leading,spacing:4){Text(title).font(.system(size:10)).foregroundStyle(.secondary);Text(value).font(.system(size:12)).textSelection(.enabled)}}}
                 if item.video{Text("재생 시간 \(item.durationText)").font(.system(size:12))}
