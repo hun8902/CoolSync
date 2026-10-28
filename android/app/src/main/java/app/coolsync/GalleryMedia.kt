@@ -84,11 +84,13 @@ object GalleryMedia {
     val item=items(c).firstOrNull{it.path==path};if(item!=null)info.put("mime",item.mime).put("date",item.date).put("width",item.width).put("height",item.height).put("duration",item.duration)
     if(item?.mime?.startsWith("video/")==true){
      val retriever=MediaMetadataRetriever();try{retriever.setDataSource(f.path);info.put("duration",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0);info.put("width",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0);info.put("height",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0);info.put("rotation",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));info.put("codec",retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE));if(info.optBoolean("locationAllowed")){val loc=retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION);val match=Regex("([+-][0-9.]+)([+-][0-9.]+)").find(loc ?: "");match?.let{info.put("latitude",it.groupValues[1].toDouble()).put("longitude",it.groupValues[2].toDouble())}}}finally{retriever.release()}
+     val capture=CaptureDates.read(c,f,item.mime,fresh=true);if(capture.time>0)info.put("captureTime",capture.time).put("captureSource",capture.source)
     }else runCatching{
      val exif=if(item!=null && info.optBoolean("locationAllowed")){
       val uri=ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,item.id)
       c.contentResolver.openFileDescriptor(MediaStore.setRequireOriginal(uri),"r")?.use{descriptor->info.put("metadataAccess","mediastore-original");ExifInterface(descriptor.fileDescriptor)} ?: throw StorageFault("original","휴대폰 원본 메타데이터를 열지 못했습니다")
      }else{info.put("metadataAccess","file");ExifInterface(f.path)}
+     val capture=CaptureDates.imageExif(exif);if(capture.time>0)info.put("captureTime",capture.time).put("captureSource","exif")
      for((key,tag)in listOf("make" to ExifInterface.TAG_MAKE,"camera" to ExifInterface.TAG_MODEL,"lens" to ExifInterface.TAG_LENS_MODEL,"iso" to ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,"exposure" to ExifInterface.TAG_EXPOSURE_TIME,"aperture" to ExifInterface.TAG_F_NUMBER,"focalLength" to ExifInterface.TAG_FOCAL_LENGTH,"captured" to ExifInterface.TAG_DATETIME_ORIGINAL,"orientation" to ExifInterface.TAG_ORIENTATION))exif.getAttribute(tag)?.let{info.put(key,it)}
      if(info.optBoolean("locationAllowed"))exif.latLong?.let{info.put("latitude",it[0]).put("longitude",it[1])}
     }.onFailure{info.put("metadataError",it.message ?: "원본 EXIF를 읽지 못했습니다")}
@@ -96,9 +98,10 @@ object GalleryMedia {
      val collection=if(item.mime.startsWith("video/"))MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
      val uri=ContentUris.withAppendedId(collection,item.id)
      runCatching{c.contentResolver.query(uri,arrayOf(MediaStore.Images.ImageColumns.DATE_TAKEN),null,null,null)?.use{cursor->
-      if(cursor.moveToFirst() && !cursor.isNull(0)){val taken=cursor.getLong(0);if(taken>0)info.put("captured",java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",java.util.Locale.getDefault()).format(java.util.Date(taken))).put("captureSource","media-store").put("deviceCaptureTime",taken)}
+      if(cursor.moveToFirst() && !cursor.isNull(0)){val taken=cursor.getLong(0);if(taken>0)info.put("captured",java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",java.util.Locale.getDefault()).format(java.util.Date(taken))).put("captureSource","media-store").put("deviceCaptureTime",taken).put("captureTime",taken)}
      }}.onFailure{info.put("deviceMetadataError",it.message ?: "휴대폰 갤러리 촬영일 조회 실패")}
     }
+    if(item!=null && info.optLong("captureTime")>0){CaptureDates.rememberOriginal(c,f,item.mime,info.getLong("captureTime"),if(info.optString("captureSource")=="media-store")"captured"else info.getString("captureSource"));CaptureDates.flush(c)}
     info.put("metadataChecked",true)
     out.put("info",info)
    }

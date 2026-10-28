@@ -24,21 +24,21 @@ object CaptureDates {
   if(!fresh){values!!.optJSONObject(key)?.let{if(it.optLong("time")>0)return Result(it.optLong("time"),it.optString("source"))};if(key in missing)return Result(0,"")}
   fun extract()=if(mime.startsWith("video/"))video(file)else image(file)
   val result=if(fresh)extract()else try{extract()}catch(_:Exception){return Result(0,"")}
-  if(result.time>0){values!!.put(key,JSONObject().put("time",result.time).put("source",result.source));missing.remove(key)}else{values!!.remove(key);missing.add(key)};dirty=true
+  if(result.time>0){values!!.put(key,JSONObject().put("time",result.time).put("source",result.source));missing.remove(key)}else{if(values!!.optJSONObject(key)?.optString("source")!="captured")values!!.remove(key);missing.add(key)};dirty=true
   return result
  }
- @Synchronized fun rememberOriginal(c:Context,file:File,mime:String,time:Long){
+ @Synchronized fun rememberOriginal(c:Context,file:File,mime:String,time:Long,source:String?=null){
   read(c,file,mime)
   val key=MessageDigest.getInstance("SHA-256").digest("${file.path}|${file.length()}|${file.lastModified()}".toByteArray()).joinToString(""){"%02x".format(it)}
-  values!!.put(key,JSONObject().put("time",time).put("source",if(mime.startsWith("video/"))"video"else "exif"));dirty=true
+  values!!.put(key,JSONObject().put("time",time).put("source",source ?: if(mime.startsWith("video/"))"video"else "exif"));dirty=true
  }
  private fun parse(text:String,pattern:String,zone:TimeZone):Long {
   val format=SimpleDateFormat(pattern,Locale.US);format.isLenient=false;format.timeZone=zone
   val position=ParsePosition(0);val date=format.parse(text,position)
   return if(date!=null&&position.index==text.length)date.time.coerceAtLeast(0)else 0
  }
- private fun image(file:File):Result {
-  val exif=ExifInterface(file)
+ private fun image(file:File):Result = imageExif(ExifInterface(file))
+ fun imageExif(exif:ExifInterface):Result {
   val original=exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)?.trim() ?: return Result(0,"")
   val offset=exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)?.trim()
   val zone=if(offset!=null&&offset.matches(Regex("[+-][0-9]{2}:[0-9]{2}")))TimeZone.getTimeZone("GMT$offset")else TimeZone.getDefault()
