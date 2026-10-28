@@ -20,12 +20,12 @@ struct PendingPhotoDeletesPane:View {
     @Environment(\.dismiss) private var dismiss
     var body:some View {
         VStack(alignment:.leading,spacing:0){
-            HStack{VStack(alignment:.leading,spacing:5){Text("삭제 대기").font(.title2.weight(.semibold));Text("휴대폰 처리 확인 후 Mac 캐시를 휴지통으로 옮깁니다.").foregroundStyle(.secondary)};Spacer();Button("닫기"){dismiss()}.keyboardShortcut(.cancelAction)}.padding(24)
+            HStack{VStack(alignment:.leading,spacing:5){Text("삭제 대기").font(.title2.weight(.semibold));Text("연결되면 자동 처리하며, 휴대폰 확인 후 Mac에 반영합니다.").foregroundStyle(.secondary)};Spacer();Button("닫기"){dismiss()}.keyboardShortcut(.cancelAction)}.padding(24)
             Divider()
-            if photos.pendingDeletes.isEmpty{VStack(spacing:12){Image(systemName:"checkmark.circle").font(.largeTitle).foregroundStyle(.secondary);Text("대기 중인 삭제가 없습니다")}.frame(maxWidth:.infinity,maxHeight:.infinity)}else{
-                List(photos.pendingDeletes){value in HStack(spacing:12){Image(systemName:value.item.video ? "video":"photo").foregroundStyle(Color.accentColor);VStack(alignment:.leading,spacing:5){Text(value.item.name).font(.headline);Text(value.error ?? (value.phoneDeleted ? "휴대폰 처리 완료 · Mac 정리 대기":"휴대폰 연결 후 삭제 확인")).font(.caption).foregroundStyle(value.error==nil ? Color.secondary:Color.orange).fixedSize(horizontal:false,vertical:true)};Spacer();Button("대기 취소"){photos.cancelDelete(value.id)}.disabled(!photos.canCancelDelete(value))}.padding(.vertical,6)}.listStyle(.inset)
+            if photos.pendingDeletes.isEmpty{VStack(spacing:12){Image(systemName:"checkmark.circle").font(.largeTitle).foregroundStyle(.secondary);Text(photos.deleteCompleted>0 ? "휴대폰·Mac 양쪽 반영 완료 \(photos.deleteCompleted)개":"대기 중인 삭제가 없습니다")}.frame(maxWidth:.infinity,maxHeight:.infinity)}else{
+                List(photos.pendingDeletes){value in HStack(spacing:12){Image(systemName:value.item.video ? "video":"photo").foregroundStyle(Color.accentColor);VStack(alignment:.leading,spacing:5){Text(value.item.name).font(.headline);Text(photos.deletionState(value)).font(.caption).foregroundStyle(value.error==nil ? Color.secondary:Color.orange).fixedSize(horizontal:false,vertical:true)};Spacer();Button("대기 취소"){photos.cancelDelete(value.id)}.disabled(!photos.canCancelDelete(value))}.padding(.vertical,6)}.listStyle(.inset)
             }
-            Divider();HStack{Text("\(photos.pendingDeletes.count)개 대기").foregroundStyle(.secondary);Spacer();Button("다시 시도"){photos.retryDeletes()}.disabled(photos.pendingDeletes.isEmpty)}.padding(20)
+            Divider();HStack{Text("양쪽 완료 \(photos.deleteCompleted)개 · 대기 \(photos.pendingDeletes.count)개").foregroundStyle(.secondary);Spacer();Button("다시 시도"){photos.retryDeletes()}.disabled(photos.pendingDeletes.isEmpty || photos.deleteInFlight)}.padding(20)
         }.frame(width:620,height:440).background(Color(nsColor:.windowBackgroundColor))
     }
 }

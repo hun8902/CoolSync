@@ -12,6 +12,7 @@ struct PendingPhotoDelete:Codable,Identifiable {
     var id=UUID().uuidString
     var item:PhotoItem
     var phoneDeleted=false
+    var errorCode:String?
     var error:String?
 }
 

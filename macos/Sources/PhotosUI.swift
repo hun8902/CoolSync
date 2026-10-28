@@ -16,7 +16,7 @@ struct PhotosPane:View {
         HStack(spacing:0){
             if photos.sidebarShown{sidebar.frame(width:215).background(.ultraThinMaterial);Divider()}
             VStack(spacing:0){toolbar;Divider();
-                if !photos.pendingDeletes.isEmpty{HStack(spacing:10){Image(systemName:photos.pendingDeletes.contains(where:{$0.error != nil}) ? "exclamationmark.triangle":"clock");Text("휴대폰 삭제 확인 대기 \(photos.pendingDeletes.count)개");Spacer();Button("상태·실패 이유 보기"){photos.showPendingDeletes=true}}.font(.caption).padding(10).background(.bar)}
+                if !photos.pendingDeletes.isEmpty || !photos.deleteActivity.isEmpty{HStack(spacing:10){if photos.deleteInFlight{ProgressView().controlSize(.small)}else{Image(systemName:photos.pendingDeletes.isEmpty ? "checkmark.circle.fill":"clock")};Text(photos.deleteActivity.isEmpty ? "연결되면 삭제 대기를 자동 처리합니다":photos.deleteActivity);Spacer();Button("삭제 상태"){photos.showPendingDeletes=true}}.font(.caption).padding(10).background(.bar)}
 
                 if photos.dateWorkActive{HStack{ProgressView(value:photos.dateWorkProgress).frame(width:140);Text(photos.status).font(.caption);Spacer();Button("중단"){photos.stopDateWork()}}.padding(10)}
                 if !photos.dateWorkActive && !photos.dateWorkFailures.isEmpty{HStack{Text("수정일 정리 실패 \(photos.dateWorkFailures.count)개");Menu("실패 내역"){ForEach(photos.dateWorkFailures,id:\.self){Text($0)}};Button("실패 항목 재시도…"){photos.retryDateWork()}}.font(.caption).padding(8)}

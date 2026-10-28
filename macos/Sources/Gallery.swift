@@ -99,10 +99,27 @@ final class PhotosModel:ObservableObject {
     @Published var moving=false
     @Published private(set) var pendingDeletes:[PendingPhotoDelete]=[]
     @Published var showPendingDeletes=false
+    @Published private(set) var deleteCompleted=0
+    @Published private(set) var deleteActivity=""
+    var deleteInFlight:Bool{!deletingIDs.isEmpty}
+    func deletionState(_ value:PendingPhotoDelete)->String{
+        if let error=value.error{return error}
+        if value.phoneDeleted{return "휴대폰 삭제 확인됨 · Mac 반영 중"}
+        if deletingIDs.contains(value.id){return "휴대폰에 삭제 요청 중 · 응답 확인 중"}
+        return connected?()==true ? "자동 처리 대기":"연결되면 자동 처리"
+    }
+    private func automaticDeleteRetryAllowed(_ value:PendingPhotoDelete)->Bool{
+        guard value.error != nil else{return true}
+        if value.phoneDeleted{return true}
+        if let code=value.errorCode{return ["transport","timeout","io","write"].contains(code)}
+        let message=value.error ?? ""
+        return !["변경", "권한", "permission", "conflict", "경로", "지원"].contains(where:{message.localizedCaseInsensitiveContains($0)})
+    }
     @Published var caching=false
     @Published var cacheSummary="아직 저장된 캐시가 없습니다"
     private(set) var disk:PhotoLibraryCache?
     private var deletingIDs=Set<String>()
+    private var deleteRequestToken=UUID()
     private var refreshQueued=false
     private var cacheGeneration=UUID()
     private var changeTask:DispatchWorkItem?
@@ -147,7 +164,7 @@ final class PhotosModel:ObservableObject {
         pageGeneration=UUID();cacheGeneration=UUID();changeTask?.cancel();originals.cancelAll();thumbnails.close();thumbnails.clear();closePreview()
         disk=PhotoLibraryCache(identity:identity);thumbnails.disk=disk;thumbnails.canFetch={ [weak self] in self?.loading != true }
         originals.thumbnails=thumbnails;originals.cacheTarget={ [weak self] item in self?.disk?.originalURL(item) };originals.key={ [weak self] in self?.thumbnails.key?() ?? Data() };originals.progress={ [weak self] owner,value in guard let self else{return};self.originalProgress=value;if owner=="preview"{self.previewPhase="원본을 가져오는 중 · \(Int(value*100))%"}}
-        pendingDeletes=disk?.pending ?? [];loading=false;caching=false;deletingIDs=[]
+        pendingDeletes=disk?.pending ?? [];deleteCompleted=0;deleteActivity="";loading=false;caching=false;deletingIDs=[]
         albums=disk?.catalog.albums ?? [];applyView();refreshCacheUsage()
     }
     func appear(){visible=true;applyView();reload()}
@@ -168,7 +185,10 @@ final class PhotosModel:ObservableObject {
         status=connected?()==true ? "\(rows.filter{!$0.video}.count)장의 사진, \(rows.filter{$0.video}.count)개의 비디오":"Mac에 저장된 목록 · 오프라인"
         if !pendingDeletes.isEmpty{status += " · 삭제 대기 \(pendingDeletes.count)개"}
     }
-    func reconnected(){if visible || !pendingDeletes.isEmpty{reload()}}
+    func reconnected(){
+        if !pendingDeletes.isEmpty{retryDeletes(automatic:true)}
+        if visible || !pendingDeletes.isEmpty{reload()}
+    }
     func changed(){
         guard visible else{return};changeTask?.cancel()
         let task=DispatchWorkItem{[weak self]in self?.reload()};changeTask=task;DispatchQueue.main.asyncAfter(deadline:.now()+0.5,execute:task)
@@ -261,7 +281,7 @@ final class PhotosModel:ObservableObject {
         guard let disk else{return}
         var queue=pendingDeletes;let known=Set(queue.map{$0.item.cacheIdentity})
         queue += values.filter{!known.contains($0.cacheIdentity)}.map{PendingPhotoDelete(item:$0)}
-        do{try disk.setPending(queue);pendingDeletes=queue;closePreview();applyView();processPendingDeletes()}catch{self.error="삭제 대기를 저장하지 못했습니다. 파일은 삭제하지 않았습니다."}
+        do{try disk.setPending(queue);pendingDeletes=queue;deleteActivity=connected?()==true ? "휴대폰 삭제 확인 대기":"연결되면 양쪽 삭제를 자동 처리합니다";closePreview();applyView();processPendingDeletes()}catch{self.error="삭제 대기를 저장하지 못했습니다. 파일은 삭제하지 않았습니다."}
     }
     private func processPendingDeletes(){
         guard !loading,deletingIDs.isEmpty,let disk else{return}
@@ -277,17 +297,17 @@ final class PhotosModel:ObservableObject {
             requests.append(request);chosen.append(value)
         }
         guard !chosen.isEmpty else{error="삭제 요청이 너무 큽니다. 항목을 다시 선택하세요.";return}
-        deletingIDs=Set(chosen.map{$0.id});let deleteToken=deletingIDs;status="양쪽 삭제 중 · \(chosen.count)개"
+        deletingIDs=Set(chosen.map{$0.id});let deleteToken=UUID();deleteRequestToken=deleteToken;deleteActivity="휴대폰 삭제 확인 중 · \(chosen.count)개";status=deleteActivity;objectWillChange.send()
         rpc?.callPhoto("mediaTrashChecked",["items":requests]){[weak self]r in
-            guard let self,self.disk===disk,self.deletingIDs==deleteToken else{return};self.deletingIDs=[]
+            guard let self,self.disk===disk,self.deleteRequestToken==deleteToken && !self.deletingIDs.isEmpty else{return};self.deletingIDs=[]
             var queue=self.pendingDeletes
             let results=r["results"]as?[[String:Any]] ?? []
             for request in chosen{
                 guard let i=queue.firstIndex(where:{$0.id==request.id})else{continue}
-                if let result=results.first(where:{$0["operation"]as?String==request.id}),result["ok"]as?Bool==true{queue[i].phoneDeleted=true;queue[i].error=nil}
-                else{queue[i].error=results.first(where:{$0["operation"]as?String==request.id})?["error"]as?String ?? r["error"]as?String ?? "휴대폰 처리 확인이 없습니다. 다시 시도하세요."}
+                if let result=results.first(where:{$0["operation"]as?String==request.id}),result["ok"]as?Bool==true{queue[i].phoneDeleted=true;queue[i].error=nil;queue[i].errorCode=nil}
+                else{let result=results.first(where:{$0["operation"]as?String==request.id});queue[i].errorCode=result?["code"]as?String ?? r["code"]as?String ?? "transport";queue[i].error=results.first(where:{$0["operation"]as?String==request.id})?["error"]as?String ?? r["error"]as?String ?? "휴대폰 처리 확인이 없습니다. 다시 시도하세요."}
             }
-            do{try disk.setPending(queue);self.pendingDeletes=queue;if queue.contains(where:{$0.error != nil}){self.showPendingDeletes=true};self.finishLocalDeletes()}catch{self.error="삭제 처리 상태를 Mac에 저장하지 못했습니다. 재연결 시 다시 확인합니다."}
+            do{try disk.setPending(queue);self.pendingDeletes=queue;if queue.contains(where:{$0.error != nil}){self.deleteActivity="일부 삭제 미반영 · 상태에서 이유를 확인하세요";self.showPendingDeletes=true};self.finishLocalDeletes()}catch{self.error="삭제 처리 상태를 Mac에 저장하지 못했습니다. 재연결 시 다시 확인합니다."}
         }
     }
     private func finishLocalDeletes(){
@@ -299,13 +319,19 @@ final class PhotosModel:ObservableObject {
         }
         do{
             var catalog=disk.catalog;catalog.items.removeAll{identities.contains($0.cacheIdentity)};try disk.commit(catalog)
-            queue.removeAll{completed.contains($0.id)};try disk.setPending(queue);pendingDeletes=queue;applyView();refreshCacheUsage()
-            if !completed.isEmpty{refreshQueued=true}
+            queue.removeAll{completed.contains($0.id)};try disk.setPending(queue);pendingDeletes=queue;deleteCompleted += completed.count;applyView();refreshCacheUsage()
+            if !completed.isEmpty{deleteActivity="휴대폰·Mac 양쪽 반영 완료 \(deleteCompleted)개";refreshQueued=true}
+            if !queue.isEmpty && deletingIDs.isEmpty{deleteActivity += " · 대기 \(queue.count)개"}
             processPendingDeletes()
         }catch{self.error="Mac 삭제 처리 기록을 저장하지 못했습니다. 다시 시도하세요."}
     }
     func canCancelDelete(_ value:PendingPhotoDelete)->Bool{!deletingIDs.contains(value.id) && !value.phoneDeleted}
-    func retryDeletes(){guard deletingIDs.isEmpty else{return};var queue=pendingDeletes;for i in queue.indices{queue[i].error=nil};do{try disk?.setPending(queue);pendingDeletes=queue;processPendingDeletes()}catch{self.error=error.localizedDescription}}
+    func retryDeletes(automatic:Bool=false){
+        guard deletingIDs.isEmpty,let disk else{return}
+        var queue=pendingDeletes
+        for i in queue.indices where !automatic || automaticDeleteRetryAllowed(queue[i]){queue[i].error=nil;queue[i].errorCode=nil}
+        do{try disk.setPending(queue);pendingDeletes=queue;deleteActivity=connected?()==true ? "삭제 대기를 자동 처리합니다":"연결되면 양쪽 삭제를 자동 처리합니다";processPendingDeletes()}catch{self.error=error.localizedDescription}
+    }
     func cancelDelete(_ id:String){guard !deletingIDs.contains(id),!pendingDeletes.contains(where:{$0.id==id&&$0.phoneDeleted})else{return};do{let queue=pendingDeletes.filter{$0.id != id};try disk?.setPending(queue);pendingDeletes=queue;applyView()}catch{self.error=error.localizedDescription}}
     func albumCreate(){prompt("새 앨범",value:"새 앨범"){[weak self]name in self?.mutate("mediaAlbumCreate",["name":name]){r in self?.album=r["path"]as?String ?? "";self?.scope="all"}}}
     func albumRename(){guard !album.isEmpty else{return};prompt("앨범 이름 변경",value:album.components(separatedBy:"/").last ?? ""){[weak self]name in guard let self else{return};self.mutate("mediaAlbumRename",["path":self.album,"name":name]){r in self.album=r["path"]as?String ?? self.album}}}
@@ -424,6 +450,6 @@ final class PhotosModel:ObservableObject {
     }
     func canNavigatePreview(_ delta:Int)->Bool{guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path})else{return false};return filtered.indices.contains(i+delta)}
     func nextPreview(_ delta:Int){guard let item=preview,let i=filtered.firstIndex(where:{$0.path==item.path}),filtered.indices.contains(i+delta)else{return};open(filtered[i+delta])}
-    func connectionEnded(){if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
+    func connectionEnded(){deleteRequestToken=UUID();if !pendingDeletes.isEmpty{deleteActivity="연결되면 남은 삭제를 자동 처리합니다"};if dateWorkActive{dateRetry.append(contentsOf:dateWorkRemaining)};dateWorkRemaining=[];dateWorkToken=UUID();dateWorkStopped=true;dateWorkActive=false;pageGeneration=UUID();infoGeneration=UUID();cacheGeneration=UUID();closePreview();originals.cancelAll();changeTask?.cancel();thumbnails.close();loading=false;moving=false;caching=false;deletingIDs=[];closePreview();applyView()}
     func imported(){changed()}
 }
