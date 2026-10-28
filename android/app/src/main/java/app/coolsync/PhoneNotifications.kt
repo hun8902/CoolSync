@@ -25,8 +25,7 @@ class PhoneNotifications : NotificationListenerService() {
         while (recent.size > 100) recent.remove(recent.keys.first())
         val app = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(item.packageName, 0)).toString() }.getOrDefault(item.packageName)
         val icon=icons.get(item.packageName) ?: appIcon(item.packageName).also{icons.put(item.packageName,it)}
-        val smsApp=item.packageName==android.provider.Telephony.Sms.getDefaultSmsPackage(this)
-        val row=JSONObject().put("eventID","notification:${item.key}:${item.postTime}").put("kind",if(smsApp)"sms"else"app").put("package",item.packageName).put("app",app.take(100)).put("title",title).put("body",text).put("thread",if(smsApp)"sms:$title"else item.packageName+":"+title).put("postedAt",item.postTime.toString()).put("sensitive",(notification.visibility!=Notification.VISIBILITY_PUBLIC || MessageInbox.code(title+" "+text)!=null).toString())
+        val row=JSONObject().put("eventID","notification:${item.key}:${item.postTime}").put("kind","app").put("package",item.packageName).put("app",app.take(100)).put("title",title).put("body",text).put("thread",item.packageName+":"+title).put("postedAt",item.postTime.toString()).put("sensitive",(notification.visibility!=Notification.VISIBILITY_PUBLIC || MessageInbox.code(title+" "+text)!=null).toString())
         MessageInbox.capture(this,row,live=false)
         sync?.sendInboxEntry(MessageInbox.shared(this,row).put("icon",icon))
     }

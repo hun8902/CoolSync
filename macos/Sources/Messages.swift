@@ -22,7 +22,7 @@ final class MessageInbox:ObservableObject {
     @Published var selection:String?
     @Published var search=""
     @Published var filter="all"
-    @Published var status="새로 수신한 문자와 앱 알림이 여기에 표시됩니다"
+    @Published var status="새로 수신한 앱 알림이 여기에 표시됩니다"
     @Published var syncing=false
     private var folder:URL?
     private var syncToken=UUID()
@@ -73,7 +73,6 @@ struct MessagesPane:View {
             VStack(spacing:0){
                 HStack{Text("메시지").font(.title2.weight(.semibold));Spacer();Button{inbox.refresh()}label:{Image(systemName:"arrow.clockwise")}.disabled(inbox.syncing).help("휴대폰 알림함 동기화")}.padding(18)
                 TextField("검색",text:$inbox.search).textFieldStyle(.roundedBorder).padding(.horizontal,14).padding(.bottom,10)
-                Picker("메시지 종류",selection:$inbox.filter){Text("전체").tag("all");Text("문자").tag("sms");Text("앱 알림").tag("app")}.pickerStyle(.segmented).padding(.horizontal,14).padding(.bottom,10)
                 List(selection:$inbox.selection){ForEach(inbox.threads){entry in
                     HStack(alignment:.top,spacing:10){avatar(entry,size:38);VStack(alignment:.leading,spacing:5){HStack{Text(entry.displayTitle(hide)).fontWeight(.semibold).lineLimit(1);Spacer(minLength:4);Text(entry.date,style:.date).font(.system(size:10)).foregroundStyle(.secondary)};Text(entry.hidden(hide) ? "민감한 내용 숨김":entry.body).font(.system(size:12)).foregroundStyle(.secondary).lineLimit(2);if entry.kind != "sms"{Text(entry.app).font(.system(size:10)).foregroundStyle(.secondary)}}}.padding(.vertical,7).tag(entry.thread).listRowBackground(entry.thread==inbox.selectedThread ? Color.accentColor.opacity(0.6):Color.clear)
                 }}.listStyle(.sidebar)
@@ -89,7 +88,7 @@ struct MessagesPane:View {
                         }.id(message.id)
                     }}.padding(22)}.onAppear{if let id=inbox.conversation.last?.id{proxy.scrollTo(id,anchor:.bottom)}}.onChange(of:inbox.selectedThread){_ in if let id=inbox.conversation.last?.id{proxy.scrollTo(id,anchor:.bottom)}}.onChange(of:inbox.conversation.last?.id){id in if let id{proxy.scrollTo(id,anchor:.bottom)}}}
                 }else{
-                    Spacer();Image(systemName:"bubble.left.and.bubble.right").font(.system(size:44,weight:.light)).foregroundStyle(.secondary);Text("문자와 앱 알림").font(.title2).padding(.top,12);Text("휴대폰 CoolSync 설정에서 알림 공유 또는 문자 수신을 켜세요.").font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(20);Spacer()
+                    Spacer();Image(systemName:"bubble.left.and.bubble.right").font(.system(size:44,weight:.light)).foregroundStyle(.secondary);Text("앱 알림함").font(.title2).padding(.top,12);Text("휴대폰 CoolSync 설정에서 알림 공유를 켜세요.").font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(20);Spacer()
                 }
                 Divider();HStack{if inbox.syncing{ProgressView().controlSize(.small)};Text(inbox.status).font(.caption).foregroundStyle(.secondary).lineLimit(2);Spacer();Text("수신함").font(.caption).foregroundStyle(.secondary)}.padding(12)
             }.frame(maxWidth:.infinity,maxHeight:.infinity).background(Color(nsColor:.textBackgroundColor))

@@ -64,3 +64,9 @@ Added album/media RPCs, on-demand encrypted Wi-Fi thumbnails, a macOS Photos-sty
 - 읽기 전용 Pixel_10_Pro 에뮬레이터에서 설치·실행, 문서의 appops 추가 허용 명령, 가상 SMS 인증번호 수신과 앱 알림 수신, Android 알림함 진입 및 복사 버튼 표시 확인. AndroidRuntime 크래시 없음.
 - 별도 macOS 테스트 프로세스에서 regular/accessory 활성화 정책 전환 통과. 실행 중인 사용자 앱의 정책은 변경하지 않음.
 - 실제 Fold의 SMS/OTP 권한·수신, 실제 두 기기 BLE 알림함 동기화와 Mac 시스템 알림 액션은 아직 확인하지 않음. MMS/RCS 과거 대화 가져오기와 문자 전송은 포함하지 않음.
+
+## 2026-10-28 문자 기능 제거
+
+- READ_SMS, RECEIVE_SMS, RECEIVE_SENSITIVE_NOTIFICATIONS 매니페스트 선언과 SmsReceiver, 문자 직접 수신·기존 문자 가져오기·권한 요청 UI 제거.
+- Android 소스에 SMS 조회·수신 API가 없는 것을 검사하고, 생성 APK의 권한 덤프에서도 문자 권한이 없는 것을 확인. 매니페스트 권한 집합은 build-1040과 동일.
+- Mac·Android 로컬 빌드 통과. 앱 알림함, 민감 내용 숨김, 알림의 인증번호 복사와 Dock 옵션은 유지. 실제 Galaxy 설치 성공 여부는 별도 확인이 필요함.

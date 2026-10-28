@@ -153,35 +153,24 @@ class MainActivity:Activity() {
         values["진행 상태"]?.text=if(FilesBridge.busy) "${FilesBridge.progress}%" else "대기"
         values["마지막 동기화"]?.text=lastSyncText()
     }
-    private fun smsPermission()=checkSelfPermission(Manifest.permission.RECEIVE_SMS)==PackageManager.PERMISSION_GRANTED
-    private fun requestSmsPermissions(){
-        val missing=listOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS).filter{checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED}
-        if(missing.isNotEmpty())requestPermissions(missing.toTypedArray(),12)else toast("문자 권한이 허용되어 있습니다")
-    }
-    private fun importMessages(){
-        if(!prefs.getBoolean("forwardSMS",false)){toast("먼저 문자 메시지 수신을 켜세요");return}
-        if(checkSelfPermission(Manifest.permission.READ_SMS)!=PackageManager.PERMISSION_GRANTED){requestSmsPermissions();return}
-        toast("최근 문자를 가져오는 중입니다")
-        Thread{val result=runCatching{MessageInbox.importSMS(this)};runOnUiThread{if(!isFinishing){toast(result.fold({"문자 ${it}개를 가져왔습니다. Mac 메시지에서 동기화하세요"},{"문자 읽기가 제한되어 있습니다. 앱 정보의 문자 권한을 확인하세요"}));render()}}}.start()
-    }
     private fun sensitiveGuide(){
         val(_,body)=sheet("인증번호 수신 권한")
-        body.addView(label("1. 알림 공유를 켜고 알림 접근 권한을 허용하세요.\n2. 원문을 보려면 휴대폰과 Mac의 ‘민감한 내용 숨기기’를 끄세요.\n3. 문자 직접 수신은 문자 메시지 수신과 문자 권한을 허용하세요.",15f,ink))
+        body.addView(label("1. 알림 공유를 켜고 알림 접근 권한을 허용하세요.\n2. 원문을 보려면 휴대폰과 Mac의 ‘민감한 내용 숨기기’를 끄세요.",15f,ink))
         space(body,14)
-        body.addView(label("Android 15 이상은 인증번호 알림을 시스템에서 가릴 수 있습니다. 문자 권한만 허용해도 제한이 남을 수 있으며, 앱 스위치가 시스템 권한을 바꾸지는 않습니다. 설치 방식에 따라 문자 권한 허용도 제한될 수 있습니다.",14f,secondary))
+        body.addView(label("Android 15 이상은 인증번호 알림을 시스템에서 가릴 수 있습니다. 앱 스위치가 시스템 권한을 바꾸지는 않습니다.",14f,secondary))
         space(body,14)
         body.addView(label("추가 허용이 필요한 경우: Mac의 ADB와 휴대폰 USB/무선 디버깅을 연결한 뒤 아래 명령을 실행할 수 있습니다. 기기·OS에 따라 지원하지 않을 수 있습니다. 이 앱은 명령을 자동 실행하지 않습니다.",14f,secondary))
         val command="adb shell cmd appops set app.coolsync RECEIVE_SENSITIVE_NOTIFICATIONS allow"
         body.addView(label(command,12f,ink).apply{setTextIsSelectable(true)})
         space(body,12);button(body,"추가 허용 명령 복사",false){getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("인증번호 수신 권한",command));toast("명령을 복사했습니다")}
-        body.addView(label("허용 취소: adb shell cmd appops set app.coolsync RECEIVE_SENSITIVE_NOTIFICATIONS default\n설정 후 새 인증번호 문자로 수신을 확인하세요. 이미 가려진 과거 알림은 복원되지 않습니다.",12f,secondary))
+        body.addView(label("허용 취소: adb shell cmd appops set app.coolsync RECEIVE_SENSITIVE_NOTIFICATIONS default\n설정 후 새 인증번호 알림으로 수신을 확인하세요. 이미 가려진 과거 알림은 복원되지 않습니다.",12f,secondary))
         space(body,12);button(body,"알림 접근 설정",false){notificationSettings()};button(body,"CoolSync 앱 권한 설정",false){startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:$packageName")))}
     }
     private fun showMessageInbox(){
-        val(dialog,body)=sheet("문자·앱 알림함")
+        val(dialog,body)=sheet("앱 알림함")
         button(body,"새로 고침",false){dialog.dismiss();showMessageInbox()}
         val rows=MessageInbox.rows(this).take(80)
-        if(rows.isEmpty())body.addView(label("아직 수신한 메시지가 없습니다. 알림 공유 또는 문자 수신을 켜세요.",14f,secondary))
+        if(rows.isEmpty())body.addView(label("아직 수신한 메시지가 없습니다. 알림 공유를 켜세요.",14f,secondary))
         for(row in rows){
             val hidden=MessageInbox.hidden(this,row);val heading=if(hidden&&row.optString("kind")!="sms")row.optString("app")else row.optString("title").ifEmpty{row.optString("app")}
             body.addView(label(heading,15f,ink,true));body.addView(label(android.text.format.DateFormat.format("yyyy-MM-dd a h:mm",row.optString("postedAt").toLongOrNull() ?: 0).toString(),11f,secondary))
@@ -290,10 +279,7 @@ class MainActivity:Activity() {
                 val alerts=group(appSettings,"알림 공유")
                 toggleRow(alerts,"Mac에 휴대폰 알림 표시",prefs.getBoolean("forwardNotifications",false)){enabled->prefs.edit().putBoolean("forwardNotifications",enabled).apply();if(enabled&&!notificationAccess())notificationSettings()}
                 toggleRow(alerts,"민감한 내용 숨기기",prefs.getBoolean("hideSensitiveNotifications",true)){enabled->prefs.edit().putBoolean("hideSensitiveNotifications",enabled).apply()}
-                toggleRow(alerts,"문자 메시지 수신",prefs.getBoolean("forwardSMS",false)){enabled->prefs.edit().putBoolean("forwardSMS",enabled).apply();if(enabled)requestSmsPermissions()}
-                row(alerts,"문자 권한",if(smsPermission())"허용됨"else"설정 필요",action={requestSmsPermissions()})
-                row(alerts,"문자·앱 알림함","›","이 휴대폰에 최대 500개 저장합니다.",action={showMessageInbox()})
-                row(alerts,"기존 문자 가져오기","›","읽기 권한을 허용하면 최근 SMS 최대 500개를 가져옵니다. RCS·MMS는 앱 알림으로 받습니다.",action={importMessages()})
+                row(alerts,"앱 알림함","›","이 휴대폰에 최대 500개 저장합니다.",action={showMessageInbox()})
                 row(alerts,"인증번호 수신 권한 안내","›",action={sensitiveGuide()})
                 row(alerts,"최근 알림 처리","",SyncService.active?.notificationResult ?: "Mac 연결 후 테스트할 수 있습니다")
                 row(alerts,"알림 접근 권한",if(notificationAccess())"허용됨"else"설정 필요",action={notificationSettings()})
