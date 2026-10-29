@@ -52,9 +52,6 @@ Mac 앱은 개인용 ad-hoc 서명이며 Apple 공증은 받지 않았다. Andro
 - The translucent surfaces are platform-adapted visuals. Android does not use Apple's native Liquid Glass framework; compositor blur falls back to translucency when unavailable.
 - Physical Galaxy-to-Mac image synchronization and paste into KakaoTalk or other third-party apps have not been verified. Source URI access and destination app image-paste support are required. Image clipboard payloads require the local-network transfer path.
 
-## Photo gallery implementation
-
-Added album/media RPCs, on-demand encrypted Wi-Fi thumbnails, a macOS Photos-style grid and inspector, local original-file preview/video playback, multi-selection and bidirectional drag/export. User requested build and deployment only; no new runtime, device, screenshot or scenario tests were performed for this gallery revision. Android and macOS compiler results and GitHub release state are reported separately.
 
 ## 2026-10-28 메시지 수신함 / Dock
 
@@ -76,11 +73,3 @@ Added album/media RPCs, on-demand encrypted Wi-Fi thumbnails, a macOS Photos-sty
 - Android 문자·앱 알림 수집/전달/저장 코드, NotificationListenerService 선언, 알림 접근 안내와 인증번호 관련 옵션 제거.
 - Mac 메시지 메뉴·화면·저장소·프로토콜 수신·인증번호 알림 액션·관련 설정 제거. Dock 표시 옵션 유지.
 - 소스 및 매니페스트에서 관련 서비스와 메시지 경로가 남지 않은 것을 확인. 설치 차단 우회나 보안 설정 변경은 하지 않음.
-
-## 2026-10-28 갤러리 원래 날짜 / 내보내기 생성일 수정
-
-- Android 원본 파일 수정일을 변경하던 mediaAlignDates 구현과 Mac 실행 메뉴 제거. 과거 날짜 변경 기록과 사진은 삭제하지 않음.
-- Mac 자체 날짜 매핑으로 원본 파일명·원본 바이트 크기·해상도가 일치하고 날짜가 유일한 Photos 기록을 읽기 전용으로 연결. 라이브러리별 한 번의 메타데이터 순회로 처리하며 사진 본문은 읽지 않음. 원본/Photos DB는 쓰지 않음.
-- 현재 날짜 없음 44개 중 31개에서 일치하는 원래 날짜를 확인했고 CoolSync 날짜 매핑에 저장. 나머지 13개에는 추측 날짜를 부여하지 않음.
-- 내보낸 복사본에 확인된 원래 생성일만 보존하고 실제 수정일은 별도로 유지. 사용자 요청에 따라 Downloads의 지정 사진 한 장의 생성일을 원래 기록으로 복구; 내용 SHA-256과 수정일 불변 확인.
-- tests/photo-date-recovery.swift: 읽기 전용 DB, 모호한/다른 파일 거부, 생성일/수정일 분리, 파일 바이트 보존, 명시적 파일명 날짜 해석 통과. Mac·Android 빌드 통과.
