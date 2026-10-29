@@ -186,7 +186,7 @@ final class PhotosModel:ObservableObject {
     var title:String{if !album.isEmpty{return albums.first{$0.path==album}?.name ?? album};return ["all":"보관함","videos":"비디오","favorites":"즐겨찾기","recent":"최근 저장된 항목","screenshots":"스크린샷"][scope] ?? "보관함"}
     var filtered:[PhotoItem]{items.filter{search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)}}
     var selected:[PhotoItem]{items.filter{selection.contains($0.path)}}
-    func timelineTime(_ item:PhotoItem)->Int64{PhotoCreationOrdering.time(item.date,source:item.dateSource)}
+    func timelineTime(_ item:PhotoItem)->Int64{item.date}
     func orderTime(_ item:PhotoItem)->Int64{timelineTime(item)}
     func orderDate(_ item:PhotoItem)->Date{Date(timeIntervalSince1970:Double(orderTime(item))/1000)}
     func dateSourceTitle(_ item:PhotoItem)->String{timelineTime(item)>0 ? "파일 생성일":"파일 생성일 조회 실패"}
@@ -215,10 +215,8 @@ final class PhotosModel:ObservableObject {
         let pending=Set(pendingDeletes.filter{$0.phoneDeleted}.map{$0.item.cacheIdentity})
         var rows=(disk?.catalog.items ?? []).filter{!pending.contains($0.cacheIdentity) && (album.isEmpty || $0.album==album) && (scope != "videos" || $0.video) && (scope != "favorites" || $0.favorite) && (scope != "screenshots" || $0.album.localizedCaseInsensitiveContains("screenshot"))}
         rows.sort{a,b in
-            let left=orderTime(a),right=orderTime(b)
-            if (left>0) != (right>0){return left>0}
-            if left != right{return ascending ? left<right:left>right}
-            return false
+            PhotoCreationOrdering.precedes(date:a.date,id:Int64(a.id) ?? 0,
+                                           date:b.date,id:Int64(b.id) ?? 0,ascending:ascending)
         }
         if !preservePreview,let preview,!rows.contains(where:{$0.cacheIdentity==preview.cacheIdentity}){closePreview()}
         items=rows;albums=disk?.catalog.albums ?? [];total=rows.count;selection.formIntersection(Set(rows.map{$0.path}));revision+=1
