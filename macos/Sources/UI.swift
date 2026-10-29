@@ -19,7 +19,6 @@ final class DashboardModel: ObservableObject {
     @Published var keyHex=""
     let files=FileTransfer()
     let explorer=ExplorerModel()
-    let photos=PhotosModel()
     let clipboardState=ClipboardPaneState()
     let history:ClipHistory
     var engine: SyncEngine?
@@ -28,15 +27,13 @@ final class DashboardModel: ObservableObject {
         history=preview ? ClipHistory(folder:FileManager.default.temporaryDirectory.appendingPathComponent("CoolSyncPreview-"+UUID().uuidString),recording:true):ClipHistory.shared
         if preview { keyHex=String(repeating:"0",count:64); return }
         do {
-            let key=try KeyStore.load();photos.configure(identity:key);keyHex=key.map{String(format:"%02x",$0)}.joined()
+            let key=try KeyStore.load();keyHex=key.map{String(format:"%02x",$0)}.joined()
             let value=SyncEngine(key:key); engine=value
             value.changed={ [weak self, weak value] status in
                 guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated;self.connecting=value.connecting; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
-                if wasConnected && !value.authenticated { self.explorer.connectionEnded();self.photos.connectionEnded() }
-                if value.authenticated { self.pairing=false; if !wasConnected { self.photos.reconnected();self.explorer.reload() } }
+                if wasConnected && !value.authenticated { self.explorer.connectionEnded() }
+                if value.authenticated { self.pairing=false; if !wasConnected { self.explorer.reload() } }
             }
-            photos.rpc=explorer;photos.files=files;photos.connected={ [weak value] in value?.authenticated ?? false };photos.thumbnails.rpc=explorer;photos.thumbnails.failure={ [weak self] message in self?.photos.status=message };photos.thumbnails.key={ [weak value] in value?.key ?? Data() };explorer.onFilesystemChange={ [weak self] in self?.photos.imported() }
-            value.mediaChanged={ [weak self] in self?.photos.changed() }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
             value.filesystemMessage={ [weak self] message in self?.explorer.handle(message) }
             files.onIdle={ [weak self] in self?.explorer.resumePromises() };explorer.files=files; explorer.connected={ [weak value] in value?.authenticated ?? false }; explorer.send={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
@@ -52,16 +49,15 @@ final class DashboardModel: ObservableObject {
     func reset() {
         let alert=NSAlert(); alert.messageText="기존 등록을 지우고 새로 연결할까요?"; alert.informativeText="기존 연결 키와 휴대폰 정보를 초기화합니다. 휴대폰의 CoolSync에서 QR 스캔을 눌러 새 QR을 스캔하세요."; alert.addButton(withTitle:"새 연결 만들기"); alert.addButton(withTitle:"취소")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do { let key=try KeyStore.replace(); explorer.connectionEnded(); files.cancel(); photos.configure(identity:key);engine?.replaceKey(key); keyHex=key.map{String(format:"%02x",$0)}.joined(); name="연결된 휴대폰 없음";model="";system="";connectionIssue="";pairing=true;tab=0;UserDefaults.standard.removeObject(forKey:"peerName");UserDefaults.standard.removeObject(forKey:"peerModel") } catch { status="연결 키 저장 실패" }
+        do { let key=try KeyStore.replace(); explorer.connectionEnded(); files.cancel(); engine?.replaceKey(key); keyHex=key.map{String(format:"%02x",$0)}.joined(); name="연결된 휴대폰 없음";model="";system="";connectionIssue="";pairing=true;tab=0;UserDefaults.standard.removeObject(forKey:"peerName");UserDefaults.standard.removeObject(forKey:"peerModel") } catch { status="연결 키 저장 실패" }
     }
 }
 
 struct CoolDashboard:View {
     @ObservedObject var model:DashboardModel
-    @ObservedObject private var photos:PhotosModel
     @AppStorage("appearance") private var appearance="system"
     @AppStorage("showDockIcon") private var showDockIcon=true
-    init(model:DashboardModel){self.model=model;self.photos=model.photos}
+    init(model:DashboardModel){self.model=model}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
     var body:some View{
@@ -73,16 +69,6 @@ struct CoolDashboard:View {
                         Section("CoolSync") {
                             Label("연결",systemImage:"link").tag("connection")
                             Label("클립보드",systemImage:"clipboard").tag("clipboard")
-                            Label("사진첩",systemImage:"photo.on.rectangle").tag("photos")
-                        }
-                        if model.tab==4 {
-                            Section("사진 보관함") {
-                                Label("즐겨찾기",systemImage:"heart").tag("photo:favorites")
-                                Label("최근 항목",systemImage:"clock").tag("photo:recent")
-                                Label("비디오",systemImage:"video").tag("photo:videos")
-                                Label("스크린샷",systemImage:"viewfinder").tag("photo:screenshots")
-                            }
-                            Section("앨범") {ForEach(photos.albums){album in Label(album.name,systemImage:"rectangle.stack").tag("album:"+album.path)}}
                         }
                         Section("휴대폰 저장소") {
                             Label("내부 저장소",systemImage:"internaldrive").tag("folder:")
@@ -99,10 +85,10 @@ struct CoolDashboard:View {
             }
             VStack(spacing:0) {
                 if !model.connected && model.tab != 0 && model.tab != 2 {
-                    HStack { Image(systemName:model.connecting ? "antenna.radiowaves.left.and.right":"wifi.exclamationmark");Text(model.tab==4 ? "Mac에 저장된 사진은 계속 볼 수 있습니다. 휴대폰 연결 후 변경분과 삭제 대기를 반영합니다.":(model.connectionIssue.isEmpty ? model.status:model.connectionIssue)).lineLimit(2);Spacer();Button("연결하기"){model.tab=0} }.font(.callout).padding(12).background(.thinMaterial)
+                    HStack { Image(systemName:model.connecting ? "antenna.radiowaves.left.and.right":"wifi.exclamationmark");Text(model.connectionIssue.isEmpty ? model.status:model.connectionIssue).lineLimit(2);Spacer();Button("연결하기"){model.tab=0} }.font(.callout).padding(12).background(.thinMaterial)
                     Divider()
                 }
-            Group{if model.tab==4{PhotosPane(photos:model.photos,files:model.files,exit:{model.tab=0},trash:{model.tab=1;model.explorer.showTrash()})}else if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
+            Group{if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
             }
         }.background(Color(nsColor:.windowBackgroundColor)).tint(.accentColor)
         .preferredColorScheme(appearance=="light" ? .light:appearance=="dark" ? .dark:nil)
@@ -112,17 +98,16 @@ struct CoolDashboard:View {
     }
     private var sidebarSelection:Binding<String?> {
         Binding(get:{
-            if model.tab==0{return "connection"};if model.tab==3{return "clipboard"};if model.tab==4{if !photos.album.isEmpty{return "album:"+photos.album};return photos.scope=="all" ? "photos":"photo:"+photos.scope};if model.tab==2{return "settings"}
+            if model.tab==0{return "connection"};if model.tab==3{return "clipboard"};if model.tab==2{return "settings"}
             return model.explorer.trashMode ? "trash":"folder:"+model.explorer.path
         },set:{ value in
             guard let value else { return }
             switch value {
             case "connection":model.tab=0
             case "clipboard":model.tab=3
-            case "photos":photos.choose();model.tab=4
             case "settings":model.tab=2
             case "trash":model.tab=1;model.explorer.showTrash()
-            default:if value.hasPrefix("photo:"){photos.choose(String(value.dropFirst(6)));model.tab=4}else if value.hasPrefix("album:"){photos.choose(album:String(value.dropFirst(6)));model.tab=4}else if value.hasPrefix("folder:"){model.tab=1;model.explorer.browse(String(value.dropFirst(7)))}
+            default:if value.hasPrefix("folder:"){model.tab=1;model.explorer.browse(String(value.dropFirst(7)))}
             }
         })
     }
@@ -164,7 +149,6 @@ struct CoolDashboard:View {
                     HStack(spacing:12) {
                         Button { model.tab=3 } label: { Label("클립보드",systemImage:"clipboard") }
                         Button { model.tab=1;model.explorer.reload() } label: { Label("파일 탐색",systemImage:"folder") }
-                        Button { model.tab=4 } label: { Label("사진첩",systemImage:"photo.on.rectangle") }
                     }.buttonStyle(.borderedProminent).controlSize(.large)
                 }
             }.padding(24).frame(maxWidth:.infinity,alignment:.leading)
@@ -174,7 +158,6 @@ struct CoolDashboard:View {
         Form{
             Section("화면 모드"){Picker("앱 테마",selection:$appearance){Text("시스템 설정").tag("system");Text("라이트").tag("light");Text("다크").tag("dark")}.pickerStyle(.segmented);Text("모든 화면과 대화상자에 같은 테마를 적용합니다.").foregroundStyle(.secondary)}
             Section("Dock"){Toggle("Dock에 CoolSync 표시",isOn:$showDockIcon).onChange(of:showDockIcon){value in NSApp.setActivationPolicy(value ? .regular:.accessory)};Text("꺼도 메뉴 막대에서 CoolSync를 열 수 있습니다.").foregroundStyle(.secondary)}
-            PhotoCacheSettings(photos:photos)
             Section("연결"){LabeledContent("휴대폰",value:model.name);LabeledContent("모델",value:model.model);Button("공유 시작 / 중지"){model.engine?.toggle()};Button("다른 휴대폰 연결"){model.reset()};Button("연결 QR 보기"){model.pairing=true;model.tab=0}}
             Section("파일 탐색"){Text("휴대폰 CoolSync의 권한 설정에서 파일 관리를 허용해야 합니다.");Text("파일과 폴더는 내부 저장소에서 관리합니다. 다른 앱의 전용 데이터와 시스템 보호 폴더는 접근할 수 없습니다.").foregroundStyle(.secondary)}
             Section("클립보드"){Toggle("복사 기록 저장",isOn:Binding(get:{model.history.enabled},set:{model.history.enabled=$0}));Text("이 기기에 최대 200개를 저장합니다. 민감한 내용 표시는 존중합니다. 이미지 한 장은 같은 로컬 네트워크에서 공유합니다.").foregroundStyle(.secondary)}

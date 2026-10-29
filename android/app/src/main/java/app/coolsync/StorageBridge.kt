@@ -29,7 +29,7 @@ object StorageBridge {
                 if(SyncService.active!==service || !service.authenticated || !sessionKey.contentEquals(Protocol.key(service) ?: byteArrayOf())) return@execute
                 val q=JSONObject(message.getString("text"));val fs=engine(service);val path=q.optString("path")
                 java.util.UUID.fromString(reference)
-                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent","mediaAlignDates","mediaFavorite","mediaAlbumCreate","mediaAlbumRename","mediaMove","mediaCopy","mediaTrash","mediaAlbumTrash")){
+                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent")){
                     val prefs=service.getSharedPreferences("fs-replay",0)
                     val seen=(prefs.getStringSet("ids",emptySet()) ?: emptySet()).toMutableSet()
                     if(reference in seen)throw StorageFault("duplicate","이미 처리한 요청입니다. 목록을 새로 고침하세요.")
@@ -37,7 +37,7 @@ object StorageBridge {
                     seen.add(reference);prefs.edit().putStringSet("ids",seen).commit()
                 }
                 response.put("ok",true)
-                if(q.getString("op").startsWith("media")){GalleryMedia.handle(service,q,response)}else when(q.getString("op")) {
+                when(q.getString("op")) {
                     "list" -> {
                         val items=fs.list(path);val start=q.optInt("offset",0).coerceIn(0,items.size);val rows=JSONArray();var next=start
                         for(item in items.drop(start).take(50)) {
@@ -50,9 +50,9 @@ object StorageBridge {
                     }
                     "mkdir" -> response.put("path",fs.create(path,q.getString("name"),true))
                     "touch" -> response.put("path",fs.create(path,q.getString("name"),false))
-                    "rename" -> {val old=mediaPaths(fs,listOf(path));val target=fs.rename(path,q.getString("name"));GalleryMedia.rescan(service,old+old.map{target+it.removePrefix(path)});response.put("path",target)}
-                    "copy","move" -> {val values=paths(q);val old=mediaPaths(fs,values);val target=q.getString("destination");fs.relocate(values,target,q.getString("op")=="copy");val destination=values.map{listOf(target,it.substringAfterLast('/')).filter{it.isNotEmpty()}.joinToString("/")};GalleryMedia.rescan(service,old+mediaPaths(fs,destination))}
-                    "trash" -> {val values=paths(q);val old=mediaPaths(fs,values);fs.discard(values);GalleryMedia.rescan(service,old)}
+                    "rename" -> {val old=mediaPaths(fs,listOf(path));val target=fs.rename(path,q.getString("name"));rescan(service,old+old.map{target+it.removePrefix(path)});response.put("path",target)}
+                    "copy","move" -> {val values=paths(q);val old=mediaPaths(fs,values);val target=q.getString("destination");fs.relocate(values,target,q.getString("op")=="copy");val destination=values.map{listOf(target,it.substringAfterLast('/')).filter{it.isNotEmpty()}.joinToString("/")};rescan(service,old+mediaPaths(fs,destination))}
+                    "trash" -> {val values=paths(q);val old=mediaPaths(fs,values);fs.discard(values);rescan(service,old)}
                     "listTrash" -> {
                         val items=fs.listTrash();val start=q.optInt("offset",0).coerceIn(0,items.size);val rows=JSONArray();var next=start
                         for(item in items.drop(start).take(50)){
@@ -62,7 +62,7 @@ object StorageBridge {
                         }
                         response.put("trash",rows).put("next",next).put("total",items.size)
                     }
-                    "restore" -> {val id=q.getString("id");val original=fs.listTrash().firstOrNull{it.id==id}?.original;fs.restore(id);if(original!=null){val root=android.os.Environment.getExternalStorageDirectory();val restored=fs.resolve(original);val paths=if(restored.isDirectory)restored.walkTopDown().filter{it.isFile}.take(20000).map{it.relativeTo(root).invariantSeparatorsPath}.toList()else listOf(original);GalleryMedia.rescan(service,paths)}}
+                    "restore" -> {val id=q.getString("id");val original=fs.listTrash().firstOrNull{it.id==id}?.original;fs.restore(id);if(original!=null){val root=android.os.Environment.getExternalStorageDirectory();val restored=fs.resolve(original);val paths=if(restored.isDirectory)restored.walkTopDown().filter{it.isFile}.take(20000).map{it.relativeTo(root).invariantSeparatorsPath}.toList()else listOf(original);rescan(service,paths)}}
                     "deletePermanent" -> fs.permanentDelete(q.getString("id"))
                     "download" -> {
                         if(FilesBridge.busy || FilesBridge.offer!=null)throw StorageFault("busy","진행 중인 파일 작업을 먼저 마치세요")
@@ -78,6 +78,15 @@ object StorageBridge {
             main.post { if(SyncService.active===service && service.authenticated && sessionKey.contentEquals(Protocol.key(service) ?: byteArrayOf())) service.sendControl("fsResponse",response.toString(),reference) }
             } finally {power.close()}
         }
+    }
+    // Keep the system file index current after explicit Explorer file operations.
+    fun rescan(c:Context,paths:List<String>){
+        val root=Environment.getExternalStorageDirectory()
+        val valid=paths.distinct().take(20000).map{File(root,it).path}
+        if(valid.isEmpty())return
+        val latch=java.util.concurrent.CountDownLatch(valid.size)
+        android.media.MediaScannerConnection.scanFile(c,valid.toTypedArray(),null){_,_->latch.countDown()}
+        latch.await(20,java.util.concurrent.TimeUnit.SECONDS)
     }
     private fun mediaPaths(fs:StorageEngine,paths:List<String>):List<String>{
         val root=Environment.getExternalStorageDirectory()

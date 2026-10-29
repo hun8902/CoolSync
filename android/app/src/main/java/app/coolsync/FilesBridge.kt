@@ -153,7 +153,7 @@ object FilesBridge {
                     }
                     require(hash.digest().joinToString("") { "%02x".format(it) }==meta.getString("sha")) { "파일 무결성 확인에 실패했습니다" }
                     if(meta.optBoolean("clipboard")){require(ClipHistory.receive(c,java.io.File(target!!.path!!),meta.optLong("clipTime"))){"새 복사 내용이 있어 이전 이미지를 적용하지 않았습니다"}}
-                    if(managed!=null) { require(!managed.final.exists() && managed.temporary.renameTo(managed.final)) { "파일을 저장하지 못했습니다" };GalleryMedia.rescan(c,listOf(managed.final.relativeTo(android.os.Environment.getExternalStorageDirectory()).invariantSeparatorsPath)) }
+                    if(managed!=null) { require(!managed.final.exists() && managed.temporary.renameTo(managed.final)) { "파일을 저장하지 못했습니다" };StorageBridge.rescan(c,listOf(managed.final.relativeTo(android.os.Environment.getExternalStorageDirectory()).invariantSeparatorsPath)) }
                     writeFrame(output,Protocol.seal(key,Protocol.message("fileDone",ref=id)).dropLast(1).toByteArray())
                 }
                 success=true

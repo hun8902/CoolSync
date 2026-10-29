@@ -43,7 +43,7 @@ final class ExplorerModel:ObservableObject {
         let item=remaining[0];status="\(action=="restore" ? "복원":"영구 삭제") 중 · \(total-remaining.count+1)/\(total) · \(item.name)"
         call(action,["id":item.id],quiet:true){[weak self]r in
             guard let self,self.trashWorking else{return}
-            if r["ok"]as?Bool==true{self.trash.removeAll{$0.id==item.id};self.trashSelection.remove(item.id);self.onFilesystemChange?()}
+            if r["ok"]as?Bool==true{self.trash.removeAll{$0.id==item.id};self.trashSelection.remove(item.id)}
             else{self.trashRetry.append(item);self.trashFailures.append("\(item.name): \(r["error"]as?String ?? "실패")")}
             self.trashStep(Array(remaining.dropFirst()),total:total,action:action)
         }
@@ -59,7 +59,6 @@ final class ExplorerModel:ObservableObject {
     @Published var needsSetup=false
     @Published var sort="name"
     @Published var ascending=true
-    var onFilesystemChange:(()->Void)?
     var send:((String,String,String)->Void)?
     var connected:(()->Bool)?
     weak var files:FileTransfer?
@@ -91,9 +90,8 @@ final class ExplorerModel:ObservableObject {
         guard let data=try? JSONSerialization.data(withJSONObject:q),let text=String(data:data,encoding:.utf8)else{return}
         callbacks[id]=completion;if quiet{quietCalls.insert(id)}
         let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.quietCalls.remove(id);if !quiet{self.fail("기기 응답 시간이 지났습니다")};callback(["ok":false,"error":"응답 시간 초과"])}
-        timers[id]=timer;let timeout:Double=["mediaSync","mediaSession","mediaAlignDates","mediaTrashChecked"].contains(op) ? 180:["mediaCopy","mediaMove","mediaAlbumRename","mediaAlbumTrash"].contains(op) ? 600:45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
+        timers[id]=timer;let timeout:Double=45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
     }
-    func callPhoto(_ op:String,_ fields:[String:Any]=[:],completion:@escaping([String:Any])->Void){call(op,fields,quiet:true,completion:completion)}
     func handle(_ m:Wire.Message){
         guard let data=m.text.data(using:.utf8),let response=try? JSONSerialization.jsonObject(with:data)as?[String:Any]else{return}
         timers.removeValue(forKey:m.ref)?.cancel();guard let callback=callbacks.removeValue(forKey:m.ref)else{return}
@@ -198,7 +196,7 @@ final class ExplorerModel:ObservableObject {
     private func nextJob(){
         guard queueActive else{return}
         jobDeadline?.cancel()
-        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{onFilesystemChange?();reload()};completion?(nil);resumePromises();return}
+        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{reload()};completion?(nil);resumePromises();return}
         let timeout=DispatchWorkItem{[weak self]in guard let self,self.queueActive,self.files?.transportActive != true else{return};self.stopJobs("파일 전송 요청에 응답이 없습니다")}
         jobDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+90,execute:timeout)
         busy=true;let job=jobs.removeFirst();status="남은 작업 \(jobs.count+1)개"

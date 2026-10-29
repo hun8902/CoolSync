@@ -18,8 +18,6 @@ class SyncService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("sync",0) }
     private var receiverRegistered = false
-    private val mediaChanged=Runnable{if(authenticated)sendControl("mediaChanged")}
-    private val mediaObserver=object:android.database.ContentObserver(main){override fun onChange(selfChange:Boolean){getSharedPreferences("gallery",0).edit().putString("syncChange",java.util.UUID.randomUUID().toString()).apply();main.removeCallbacks(mediaChanged);main.postDelayed(mediaChanged,1200)}}
     private var server: BluetoothGattServer? = null
     private var bleGeneration=0
     private var advertiser: BluetoothLeAdvertiser? = null
@@ -106,12 +104,6 @@ class SyncService : Service() {
         super.onCreate()
         if(checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return }
         active = this
-        // Gallery restore notifications can use image/video or per-volume URIs.
-        val mediaVolumes=runCatching{android.provider.MediaStore.getExternalVolumeNames(this)}.getOrDefault(emptySet())+"external"
-        for(volume in mediaVolumes){
-            val uris=listOf(android.provider.MediaStore.Files.getContentUri(volume),android.provider.MediaStore.Images.Media.getContentUri(volume),android.provider.MediaStore.Video.Media.getContentUri(volume))
-            for(uri in uris)runCatching{contentResolver.registerContentObserver(uri,true,mediaObserver)}
-        }
         seen.addAll(prefs.getStringSet("seen",emptySet()) ?: emptySet())
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("sync","CoolSync 연결",NotificationManager.IMPORTANCE_LOW))
@@ -254,7 +246,6 @@ class SyncService : Service() {
         else main.postDelayed(sendTimeout,8000)
     }
     private fun resetPeer() {
-        GalleryServer.close()
         peer = null; authenticated = false;connecting=false; subscribed = false; pendingHello=null;handshakeAck=""; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null
         main.removeCallbacks(ackTimeout);main.removeCallbacks(linkTimeout);main.removeCallbacks(sendTimeout)
@@ -265,6 +256,6 @@ class SyncService : Service() {
         server = null; advertiser = null; resetPeer()
     }
     override fun onDestroy() {
-        main.removeCallbacks(mediaChanged);runCatching{contentResolver.unregisterContentObserver(mediaObserver)}; FilesBridge.cancel(); active = null; closeBle(); if(receiverRegistered) unregisterReceiver(bluetoothReceiver); main.removeCallbacksAndMessages(null); sendBroadcast(Intent(STATE).setPackage(packageName)); super.onDestroy() }
+        FilesBridge.cancel(); active = null; closeBle(); if(receiverRegistered) unregisterReceiver(bluetoothReceiver); main.removeCallbacksAndMessages(null); sendBroadcast(Intent(STATE).setPackage(packageName)); super.onDestroy() }
     override fun onBind(intent: Intent?) = null
 }

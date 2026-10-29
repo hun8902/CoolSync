@@ -63,7 +63,6 @@ enum KeyStore {
 
 final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var changed: ((String)->Void)?
-    var mediaChanged:(()->Void)?
     var fileMessage: ((Wire.Message)->Void)?
     var imageCopied:((URL,Int64)->Void)?
     var filesystemMessage: ((Wire.Message)->Void)?
@@ -274,7 +273,6 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
         if m.type=="readyAck",!readyID.isEmpty,m.ref==readyID {readyID="";completeConnection();return}
         guard authenticated else { return }
-        if m.type=="mediaChanged" {mediaChanged?();return}
         if m.type=="fsResponse" { filesystemMessage?(m); return }
         if m.type.hasPrefix("file") { fileMessage?(m); return }
         if m.type == "ack", m.ref == pending?.id {
