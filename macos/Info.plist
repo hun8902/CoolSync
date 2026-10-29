@@ -25,6 +25,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>선택한 휴대폰 사진과 Live Photo를 Mac 사진 보관함에 추가합니다.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>선택한 휴대폰 사진과 영상을 Mac 사진 보관함에 저장합니다.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>연결한 Android 휴대폰과 클립보드를 공유하기 위해 Bluetooth를 사용합니다.</string>
 	<key>NSLocalNetworkUsageDescription</key>

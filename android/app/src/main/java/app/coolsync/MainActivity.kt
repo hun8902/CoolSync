@@ -48,6 +48,7 @@ class MainActivity:Activity() {
     @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onResume(){
         super.onResume()
+        GalleryConsent.launchPending(this)
         AppUpdates.resume(this)
         if(!observed){if(Build.VERSION.SDK_INT>=33)registerReceiver(receiver,IntentFilter(SyncService.STATE),RECEIVER_NOT_EXPORTED)else registerReceiver(receiver,IntentFilter(SyncService.STATE),"$packageName.INTERNAL",null);observed=true}
         AppUpdates.changed={if(!isFinishing)render()};AppUpdates.automatic(this)

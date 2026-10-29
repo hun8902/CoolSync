@@ -273,7 +273,7 @@ final class SyncEngine: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
         if m.type=="readyAck",!readyID.isEmpty,m.ref==readyID {readyID="";completeConnection();return}
         guard authenticated else { return }
-        if m.type=="fsResponse" { filesystemMessage?(m); return }
+        if m.type=="fsResponse" || m.type=="galleryChanged" { filesystemMessage?(m); return }
         if m.type.hasPrefix("file") { fileMessage?(m); return }
         if m.type == "ack", m.ref == pending?.id {
             lastSync = Date(); pending = nil; ackTask?.cancel(); status(m.status == "ok" ? "휴대폰에 복사됨" : m.status == "superseded" ? "휴대폰의 최신 복사 유지" : "휴대폰에서 반영하지 못했습니다"); return

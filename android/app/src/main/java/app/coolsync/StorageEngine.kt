@@ -67,6 +67,31 @@ class StorageEngine(root:File, private val metadata:File) {
             else if(!source.renameTo(target)) fail("write","${source.name}: 이동하지 못했습니다")
         }
     }
+    /** Exact duplicates are checked again on the phone immediately before moving copies to trash. */
+    fun mergeIdentical(paths:List<String>):List<String> {
+        if(paths.size !in 2..1000 || paths.distinct().size!=paths.size)fail("selection","서로 다른 중복 항목을 선택하세요")
+        val files=paths.map{mutable(it).also{file->if(!file.isFile)fail("file","사진이나 영상 파일만 병합할 수 있습니다")}}
+        fun digest(file:File):ByteArray {
+            val length=file.length();val modified=file.lastModified();val hash=java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().buffered().use{input->val buffer=ByteArray(262144);while(true){val count=input.read(buffer);if(count<0)break;hash.update(buffer,0,count)}}
+            if(file.length()!=length || file.lastModified()!=modified)fail("changed","원본이 변경되어 병합하지 않았습니다")
+            return hash.digest()
+        }
+        val snapshots=files.map{it.length() to it.lastModified()}
+        val expected=digest(files.first())
+        for(file in files.drop(1))if(file.length()!=files.first().length() || !digest(file).contentEquals(expected))fail("changed","내용이 다른 파일은 병합할 수 없습니다. 다시 분석하세요.")
+        for((index,file) in files.withIndex())if(file.length()!=snapshots[index].first || file.lastModified()!=snapshots[index].second)fail("changed","파일이 변경되어 병합하지 않았습니다")
+        val removed=paths.drop(1);discard(removed);return removed
+    }
+    fun duplicateFile(path:String):String {
+        val source=mutable(path);if(!source.isFile)fail("file","파일만 복제할 수 있습니다")
+        val stem=source.nameWithoutExtension;val extension=source.extension.let{if(it.isEmpty())"" else ".$it"};var number=1
+        var target=File(source.parentFile,"$stem 복사본$extension")
+        while(target.exists()){number++;target=File(source.parentFile,"$stem 복사본 $number$extension")}
+        resolve(relative(target),false)
+        source.inputStream().use{input->Files.newOutputStream(target.toPath(),StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE).use{output->input.copyTo(output)}}
+        return relative(target)
+    }
     fun discard(paths:List<String>) {
         val selected=topLevel(paths).map{mutable(it)}
         checkTrash()

@@ -21,6 +21,10 @@ object StorageCoreChecks {
   if(args.getOrNull(1)!="android"){
    Files.createSymbolicLink(File(root,"B/link").toPath(),outside.toPath());check(runCatching{fs.resolve("B/link")}.isFailure);check(fs.list("B").none{it.name=="link"})
   }
+  File(root,"same.jpg").writeText("same original bytes");File(root,"copy.jpg").writeText("same original bytes");File(root,"different.jpg").writeText("different original")
+  check(runCatching{fs.mergeIdentical(listOf("same.jpg","different.jpg"))}.isFailure);check(File(root,"different.jpg").exists());check(File(root,"same.jpg").exists())
+  check(fs.mergeIdentical(listOf("same.jpg","copy.jpg"))==listOf("copy.jpg"));check(File(root,"same.jpg").readText()=="same original bytes");check(!File(root,"copy.jpg").exists());val merged=fs.listTrash().single();fs.restore(merged.id);check(File(root,"copy.jpg").readText()=="same original bytes")
+  val duplicate=fs.duplicateFile("same.jpg");check(File(root,duplicate).readBytes().contentEquals(File(root,"same.jpg").readBytes()));check(duplicate!="same.jpg")
   check(outside.readText()=="outside sentinel")
   println("Storage core: PASS (create/list/rename, recursive copy/move, trash/restore/permanent delete, traversal and collision rejection; external sentinel preserved)")
  }

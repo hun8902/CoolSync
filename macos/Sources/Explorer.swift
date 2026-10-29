@@ -11,7 +11,7 @@ struct RemoteEntry:Identifiable,Decodable {
     let size:Int64
     let modified:Int64
 }
-struct RemoteTrash:Identifiable,Decodable{let id:String;let name:String;let original:String;let deleted:Int64}
+struct RemoteTrash:Identifiable,Decodable{let id:String;let name:String;let original:String;let deleted:Int64;var expires:Int64?=nil}
 private struct ExplorerPromise{let entry:RemoteEntry;let target:URL;let quiet:Bool;let valid:(()->Bool)?;let completion:(Error?)->Void}
 private enum ExplorerJob{case upload(URL,String);case download(String,URL);case mkdir(String,String)}
 
@@ -70,6 +70,7 @@ final class ExplorerModel:ObservableObject {
     private var cutting=false
     private var jobs:[ExplorerJob]=[]
     private var queueActive=false
+    private var uploadCompletion:(()->Void)?
     private var promisedCompletion:((Error?)->Void)?
     private var promiseQueue:[ExplorerPromise]=[]
     private var quietJob=false
@@ -90,7 +91,7 @@ final class ExplorerModel:ObservableObject {
         guard let data=try? JSONSerialization.data(withJSONObject:q),let text=String(data:data,encoding:.utf8)else{return}
         callbacks[id]=completion;if quiet{quietCalls.insert(id)}
         let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.quietCalls.remove(id);if !quiet{self.fail("기기 응답 시간이 지났습니다")};callback(["ok":false,"error":"응답 시간 초과"])}
-        timers[id]=timer;let timeout:Double=45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
+        timers[id]=timer;let timeout:Double=op=="galleryMerge" ? 600:45;DispatchQueue.main.asyncAfter(deadline:.now()+timeout,execute:timer);send?("fsRequest",text,id)
     }
     func handle(_ m:Wire.Message){
         guard let data=m.text.data(using:.utf8),let response=try? JSONSerialization.jsonObject(with:data)as?[String:Any]else{return}
@@ -144,7 +145,7 @@ final class ExplorerModel:ObservableObject {
     private func mutate(_ op:String,_ fields:[String:Any]){busy=true;call(op,fields){[weak self]r in guard let self else{return};self.busy=false;if r["ok"]as?Bool==true{self.selection=[];self.reload()}}}
     private func prompt(_ title:String,value:String,completion:@escaping(String)->Void){let alert=NSAlert();alert.messageText=title;let input=NSTextField(string:value);input.frame=NSRect(x:0,y:0,width:300,height:26);alert.accessoryView=input;alert.addButton(withTitle:"확인");alert.addButton(withTitle:"취소");alert.window.initialFirstResponder=input;if alert.runModal() == .alertFirstButtonReturn{completion(input.stringValue)}}
     func chooseUpload(){let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=true;panel.allowsMultipleSelection=true;if panel.runModal() == .OK{upload(panel.urls,to:path)}}
-    func upload(_ urls:[URL],to folder:String){
+    func upload(_ urls:[URL],to folder:String,completion:(()->Void)?=nil){
         guard !queueActive,files?.hasTransfer != true else{fail("진행 중인 파일 작업을 먼저 마치세요");return}
         var planned:[ExplorerJob]=[]
         do{
@@ -161,7 +162,7 @@ final class ExplorerModel:ObservableObject {
                     }
                 }else{planned.append(.upload(url,folder))}
             }
-            jobs=planned;queueActive=true;nextJob()
+            jobs=planned;uploadCompletion=completion;queueActive=true;nextJob()
         }catch{fail("선택한 파일이나 폴더를 읽지 못했습니다")}
     }
     func download(move:Bool=false){
@@ -196,7 +197,7 @@ final class ExplorerModel:ObservableObject {
     private func nextJob(){
         guard queueActive else{return}
         jobDeadline?.cancel()
-        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{reload()};completion?(nil);resumePromises();return}
+        guard !jobs.isEmpty else{queueActive=false;busy=false;status="파일 작업 완료";let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{reload()};completion?(nil);let uploadDone=uploadCompletion;uploadCompletion=nil;uploadDone?();resumePromises();return}
         let timeout=DispatchWorkItem{[weak self]in guard let self,self.queueActive,self.files?.transportActive != true else{return};self.stopJobs("파일 전송 요청에 응답이 없습니다")}
         jobDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+90,execute:timeout)
         busy=true;let job=jobs.removeFirst();status="남은 작업 \(jobs.count+1)개"
@@ -207,7 +208,7 @@ final class ExplorerModel:ObservableObject {
         case .mkdir(let parent,let name):call("mkdir",["path":parent,"name":name]){[weak self]r in if r["ok"]as?Bool==true{self?.nextJob()}else{self?.stopJobs(r["error"]as?String ?? "폴더 생성 실패")}}
         }
     }
-    func connectionEnded(){
+    func connectionEnded(){uploadCompletion=nil;
         trashStop=true;trashWorking=false;trashSelection=[];trashRetry=[];trashFailures=[];trash=[]
         jobDeadline?.cancel();for timer in timers.values{timer.cancel()};timers=[:];callbacks=[:];quietCalls=[]
         jobs=[];queueActive=false;files?.expectedDownloads=[:];files?.onCompletion=nil;files?.cancel(notify:false)
@@ -216,5 +217,5 @@ final class ExplorerModel:ObservableObject {
         busy=false;selection=[];error=nil;needsSetup=false;status="휴대폰 연결이 끊겼습니다"
     }
     func cancelJobs(){files?.cancel();stopJobs("작업 취소됨")}
-    private func stopJobs(_ message:String){jobDeadline?.cancel();jobs=[];queueActive=false;busy=false;files?.expectedDownloads=[:];files?.onCompletion=nil;let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{fail(message)}else{status=message};completion?(NSError(domain:"CoolSync",code:1,userInfo:[NSLocalizedDescriptionKey:message]));resumePromises()}
+    private func stopJobs(_ message:String){uploadCompletion=nil;jobDeadline?.cancel();jobs=[];queueActive=false;busy=false;files?.expectedDownloads=[:];files?.onCompletion=nil;let silent=quietJob;quietJob=false;let completion=promisedCompletion;promisedCompletion=nil;if !silent{fail(message)}else{status=message};completion?(NSError(domain:"CoolSync",code:1,userInfo:[NSLocalizedDescriptionKey:message]));resumePromises()}
 }

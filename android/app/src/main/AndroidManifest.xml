@@ -28,6 +28,7 @@
             </intent-filter>
             <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="*/*" /></intent-filter>
         </activity>
+        <activity android:name=".GalleryConsentActivity" android:exported="false" android:theme="@style/CaptureTheme" />
         <activity android:name=".PairScannerActivity" android:exported="false" />
         <activity android:name=".CaptureActivity" android:exported="false" android:excludeFromRecents="true" android:taskAffinity="" android:theme="@style/CaptureTheme" />
         <receiver android:name=".BootReceiver" android:exported="true">

@@ -29,7 +29,7 @@ object StorageBridge {
                 if(SyncService.active!==service || !service.authenticated || !sessionKey.contentEquals(Protocol.key(service) ?: byteArrayOf())) return@execute
                 val q=JSONObject(message.getString("text"));val fs=engine(service);val path=q.optString("path")
                 java.util.UUID.fromString(reference)
-                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent")){
+                if(q.optString("op") in setOf("mkdir","touch","rename","copy","move","trash","restore","deletePermanent","galleryMerge","galleryDuplicate","gallerySystemAction")){
                     val prefs=service.getSharedPreferences("fs-replay",0)
                     val seen=(prefs.getStringSet("ids",emptySet()) ?: emptySet()).toMutableSet()
                     if(reference in seen)throw StorageFault("duplicate","이미 처리한 요청입니다. 목록을 새로 고침하세요.")
@@ -40,6 +40,10 @@ object StorageBridge {
                 when(q.getString("op")) {
                     "gallery" -> GalleryMedia.list(service,q,response)
                     "galleryThumb" -> GalleryMedia.thumbnail(service,q,response)
+                    "gallerySystemTrash" -> GalleryMedia.systemTrash(service,q,response)
+                    "gallerySystemAction" -> GalleryConsent.request(service,q,response)
+                    "galleryMerge" -> {val removed=fs.mergeIdentical(paths(q));rescan(service,removed);response.put("removed",org.json.JSONArray(removed))}
+                    "galleryDuplicate" -> {val created=fs.duplicateFile(path);rescan(service,listOf(created));response.put("path",created)}
                     "list" -> {
                         val items=fs.list(path);val start=q.optInt("offset",0).coerceIn(0,items.size);val rows=JSONArray();var next=start
                         for(item in items.drop(start).take(50)) {

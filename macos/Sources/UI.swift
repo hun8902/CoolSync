@@ -33,10 +33,10 @@ final class DashboardModel: ObservableObject {
             value.changed={ [weak self, weak value] status in
                 guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated;self.connecting=value.connecting; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
                 if wasConnected && !value.authenticated { self.gallery.disconnect(); self.explorer.connectionEnded() }
-                if value.authenticated { self.pairing=false; if !wasConnected { self.explorer.reload() } }
+                if value.authenticated { self.pairing=false; if !wasConnected { self.gallery.useLibrary(identity:value.key.base64EncodedString()); self.explorer.reload(); if self.tab==4{self.gallery.reload()} } }
             }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
-            value.filesystemMessage={ [weak self] message in self?.explorer.handle(message) }
+            value.filesystemMessage={ [weak self] message in if message.type=="galleryChanged"{self?.gallery.reload();if self?.gallery.category=="최근 삭제된 항목"{self?.gallery.loadDeleted()}}else{self?.explorer.handle(message)} }
             files.onIdle={ [weak self] in self?.explorer.resumePromises() };explorer.files=files; explorer.connected={ [weak value] in value?.authenticated ?? false }; explorer.send={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.sendControl={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.key={ [weak value] in value?.key ?? Data() }; files.connected={ [weak value] in value?.authenticated ?? false }
