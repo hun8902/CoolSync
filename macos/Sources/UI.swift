@@ -19,6 +19,7 @@ final class DashboardModel: ObservableObject {
     @Published var keyHex=""
     let files=FileTransfer()
     let explorer=ExplorerModel()
+    lazy var gallery=GalleryModel(explorer:explorer)
     let clipboardState=ClipboardPaneState()
     let history:ClipHistory
     var engine: SyncEngine?
@@ -31,7 +32,7 @@ final class DashboardModel: ObservableObject {
             let value=SyncEngine(key:key); engine=value
             value.changed={ [weak self, weak value] status in
                 guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated;self.connecting=value.connecting; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
-                if wasConnected && !value.authenticated { self.explorer.connectionEnded() }
+                if wasConnected && !value.authenticated { self.gallery.disconnect(); self.explorer.connectionEnded() }
                 if value.authenticated { self.pairing=false; if !wasConnected { self.explorer.reload() } }
             }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
@@ -62,13 +63,16 @@ struct CoolDashboard:View {
     @Environment(\.colorScheme) private var scheme
     var body:some View{
         HStack(spacing:0){
-            Group {
+            if model.tab != 4 {
                 VStack(spacing:0) {
                     HStack(spacing:12){Image(systemName:"iphone.gen3").font(.system(size:25,weight:.regular)).foregroundStyle(Color.accentColor).frame(width:38,height:42).background(Color.accentColor.opacity(0.09),in:RoundedRectangle(cornerRadius:12));VStack(alignment:.leading,spacing:4){Text(model.name).font(.headline).lineLimit(2);Text(model.connected ? "연결됨":model.connecting ? "연결 중…":"미연결").font(.caption).foregroundStyle(model.connected ? .green:.secondary)};Spacer()}.padding(18)
                     List(selection:sidebarSelection) {
                         Section("CoolSync") {
                             Label("연결",systemImage:"link").tag("connection")
                             Label("클립보드",systemImage:"clipboard").tag("clipboard")
+                        }
+                        Section("사진") {
+                            Label("보관함",systemImage:"photo.on.rectangle").tag("gallery")
                         }
                         Section("휴대폰 저장소") {
                             Label("내부 저장소",systemImage:"internaldrive").tag("folder:")
@@ -88,7 +92,7 @@ struct CoolDashboard:View {
                     HStack { Image(systemName:model.connecting ? "antenna.radiowaves.left.and.right":"wifi.exclamationmark");Text(model.connectionIssue.isEmpty ? model.status:model.connectionIssue).lineLimit(2);Spacer();Button("연결하기"){model.tab=0} }.font(.callout).padding(12).background(.thinMaterial)
                     Divider()
                 }
-            Group{if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
+            Group{if model.tab==4{GalleryPane(model:model.gallery,exit:{model.tab=0})}else if model.tab==1{ExplorerPane(model:model.explorer,files:model.files)}else if model.tab==0{connection}else if model.tab==3{ClipboardPane(history:model.history,state:model.clipboardState)}else{settings}}.id(model.tab).transition(.opacity.combined(with:.offset(y:reduceMotion ? 0:8)))
             }
         }.background(Color(nsColor:.windowBackgroundColor)).tint(.accentColor)
         .preferredColorScheme(appearance=="light" ? .light:appearance=="dark" ? .dark:nil)
@@ -98,11 +102,12 @@ struct CoolDashboard:View {
     }
     private var sidebarSelection:Binding<String?> {
         Binding(get:{
-            if model.tab==0{return "connection"};if model.tab==3{return "clipboard"};if model.tab==2{return "settings"}
+            if model.tab==4{return "gallery"};if model.tab==0{return "connection"};if model.tab==3{return "clipboard"};if model.tab==2{return "settings"}
             return model.explorer.trashMode ? "trash":"folder:"+model.explorer.path
         },set:{ value in
             guard let value else { return }
             switch value {
+            case "gallery":model.tab=4;model.gallery.reload()
             case "connection":model.tab=0
             case "clipboard":model.tab=3
             case "settings":model.tab=2

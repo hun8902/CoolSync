@@ -38,6 +38,8 @@ object StorageBridge {
                 }
                 response.put("ok",true)
                 when(q.getString("op")) {
+                    "gallery" -> GalleryMedia.list(service,q,response)
+                    "galleryThumb" -> GalleryMedia.thumbnail(service,q,response)
                     "list" -> {
                         val items=fs.list(path);val start=q.optInt("offset",0).coerceIn(0,items.size);val rows=JSONArray();var next=start
                         for(item in items.drop(start).take(50)) {
