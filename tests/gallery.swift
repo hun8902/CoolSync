@@ -63,7 +63,7 @@ gallery.annotate(seaside){$0.latitude=37.5;$0.longitude=126.5;$0.place="인천"}
 let person=PhotoPerson(name:"테스트 인물",paths:[portrait.path],portrait:gallery.thumbnails[portrait.id]!.tiffRepresentation);gallery.change{$0.people.append(person);$0.annotations[portrait.path]?.people=[person.id]}
 precondition(gallery.peopleVisible.count==1)
 precondition(store.load()==gallery.libraryDoc)
-gallery.status="합성 자료 · 편집·저장·Vision 분석 검증 완료"
+gallery.sync.phase = .ready;gallery.sync.total=gallery.items.count;gallery.sync.received=gallery.items.count;gallery.status="합성 자료 · 편집·저장·Vision 분석 검증 완료"
 let viewer=GalleryViewerState();let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1440,height:900),styleMask:[.borderless],backing:.buffered,defer:false)
 let host=NSHostingView(rootView:GalleryPane(model:gallery,viewer:viewer).environment(\.colorScheme,.dark).environment(\.controlActiveState,.active));window.contentView=host
 func save(_ name:String){host.frame=NSRect(x:0,y:0,width:1440,height:900);host.layoutSubtreeIfNeeded();RunLoop.main.run(until:Date().addingTimeInterval(0.5));host.displayIfNeeded();let bitmap=host.bitmapImageRepForCachingDisplay(in:host.bounds)!;host.cacheDisplay(in:host.bounds,to:bitmap);try!bitmap.representation(using:.png,properties:[:])!.write(to:output.appendingPathComponent(name+".png"))}

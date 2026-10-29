@@ -53,9 +53,9 @@ struct GalleryPane:View {
     var body:some View{
         HStack(spacing:0){
             if viewer.showSidebar && model.selected==nil && !model.slideshow{sidebar;Divider()}
-            VStack(spacing:0){toolbar;Divider();content;footer}
+            VStack(spacing:0){toolbar;Divider();if model.selected==nil && (model.sync.busy || model.sync.phase == .failed || model.sync.phase == .disconnected || model.sync.phase == .canceled || model.sync.cached || model.sync.previewFailed>0){PhotoLoadingPanel(model:model)};content;footer}
         }.background(Color(nsColor:.windowBackgroundColor))
-        .onAppear{if model.items.isEmpty{model.reload()}}
+        .onAppear{model.ensureLoaded()}
         .onDisappear{viewer.player?.pause();viewer.music?.stop();model.slideshow=false}
         .onChange(of:model.original){_ in configurePlayer()}
         .onChange(of:model.currentURL){_ in if !model.editing{configurePlayer()}}
@@ -138,12 +138,13 @@ struct GalleryPane:View {
         }.buttonStyle(.borderless).padding(.horizontal,16).frame(height:58).background(.ultraThinMaterial)
     }
     private func position(_ item:GalleryItem)->String{let values=model.slideshow ? model.slideshowItems:model.visible;return "\((values.firstIndex{$0.id==item.id} ?? 0)+1)/\(values.count)"}
-    private var dateRange:String{let values=model.visible.compactMap{model.captureDate($0)};guard let first=values.min(),let last=values.max()else{return "\(model.visible.count)개 항목"};return first.formatted(date:.abbreviated,time:.omitted)+"–"+last.formatted(date:.abbreviated,time:.omitted)}
+    private var dateRange:String{if model.items.isEmpty && model.loading{return "휴대폰 목록 확인 중"};if model.items.isEmpty && model.sync.phase == .failed{return "목록 수신 실패"};let values=model.visible.compactMap{model.captureDate($0)};guard let first=values.min(),let last=values.max()else{return "\(model.visible.count)개 항목"};return first.formatted(date:.abbreviated,time:.omitted)+"–"+last.formatted(date:.abbreviated,time:.omitted)}
     private var footer:some View{
         VStack(spacing:0){Divider();HStack(spacing:10){if model.loading || model.saving{ProgressView().controlSize(.small)};Text(model.analysisRunning ? model.analysisProgress:model.status).lineLimit(1);Spacer();if !model.selection.isEmpty{Text("\(model.selection.count)개 선택됨")};if model.slideshow{Button("중단"){model.slideshow=false}}}.font(.caption).foregroundStyle(.secondary).padding(8)}
     }
     @ViewBuilder private var content:some View{
         if let item=model.selected{detail(item)}
+        else if model.items.isEmpty && model.sync.phase != .ready{PhotoLoadingEmpty(model:model)}
         else if (model.category=="가려진 항목" || model.category=="최근 삭제된 항목") && !model.unlocked{locked}
         else if model.category=="최근 삭제된 항목"{deletedView}
         else if model.category=="사람들"{peopleView}
@@ -156,14 +157,14 @@ struct GalleryPane:View {
     private var library:some View{ScrollViewReader{proxy in ScrollView{
         if model.grouping != "모든 사진",model.category=="보관함"{timeline}
         else{LazyVGrid(columns:[GridItem(.adaptive(minimum:model.tile),spacing:12)],spacing:16){ForEach(model.visible){item in cell(item)}}.padding(18)}
-        if model.visible.isEmpty{empty("표시할 사진이 없습니다",icon:"photo.on.rectangle")}
+        if model.visible.isEmpty{empty(model.items.isEmpty ? "휴대폰 사진 목록을 확인했습니다 · 사진과 동영상이 없습니다":"선택한 조건과 일치하는 사진이 없습니다",icon:"photo.on.rectangle")}
     }.background(Color(nsColor:.textBackgroundColor)).overlay(alignment:.trailing){if viewer.info,let item=model.targets.first{PhotoInfoPane(model:model,item:item,viewer:viewer).frame(width:300).background(.regularMaterial).padding(12)}}}}
     private var timeline:some View{LazyVGrid(columns:[GridItem(.adaptive(minimum:300),spacing:18)],spacing:20){ForEach(Array(model.sections.enumerated()),id:\.offset){_,section in
         Button{if let item=section.1.first,let date=model.captureDate(item){let f=DateFormatter();f.dateFormat=model.grouping=="년" ? "yyyy":"yyyy-MM";model.timelinePrefix=f.string(from:date)};model.grouping="모든 사진"}label:{ZStack(alignment:.bottomLeading){if let item=section.1.first,let image=model.thumbnails[item.id]{Image(nsImage:image).resizable().scaledToFill().frame(height:250).clipped()}else{Rectangle().fill(.quaternary).frame(height:250)};LinearGradient(colors:[.clear,.black.opacity(0.8)],startPoint:.center,endPoint:.bottom);VStack(alignment:.leading){Text(section.0).font(.title.bold());Text("\(section.1.count)개 항목").font(.caption)}.foregroundStyle(.white).padding(16)}.clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).onAppear{if let item=section.1.first{model.thumb(item)}}
     }}.padding(18)}
     private func cell(_ item:GalleryItem)->some View{
         VStack(spacing:5){ZStack(alignment:.bottomTrailing){
-            Group{if let image=model.thumbnails[item.id]{if viewer.square{Image(nsImage:image).resizable().scaledToFill()}else{Image(nsImage:image).resizable().scaledToFit()}}else{RoundedRectangle(cornerRadius:4).fill(.quaternary).overlay{Image(systemName:item.video ? "video":"photo").foregroundStyle(.secondary)}}}.frame(height:model.tile).frame(maxWidth:.infinity).clipped()
+            Group{if let image=model.thumbnails[item.id]{if viewer.square{Image(nsImage:image).resizable().scaledToFill()}else{Image(nsImage:image).resizable().scaledToFit()}}else{RoundedRectangle(cornerRadius:4).fill(.quaternary).overlay{if model.thumbnailErrors[item.id] != nil{VStack(spacing:8){Image(systemName:"exclamationmark.triangle").foregroundStyle(.orange);Text("미리보기 실패").font(.caption);Button("다시 받기"){model.retryThumbnail(item)}.buttonStyle(.borderless)}}else{VStack(spacing:8){ProgressView().controlSize(.small);Text("미리보기 받는 중").font(.caption).foregroundStyle(.secondary)}}}}}.frame(height:model.tile).frame(maxWidth:.infinity).clipped()
             if item.video{Text(String(format:"%d:%02d",item.duration/60000,item.duration/1000%60)).font(.caption.bold()).padding(5).foregroundStyle(.white).shadow(radius:3)}
             HStack{if model.favorite(item){Image(systemName:"heart.fill")};if model.note(item).edit != nil{Image(systemName:"slider.horizontal.3")};Spacer();if item.live==true || model.motionPaths.contains(item.path) || model.note(item).labels.contains("live"){Image(systemName:"livephoto")}}.font(.caption).foregroundStyle(.white).shadow(radius:3).padding(6).frame(maxHeight:.infinity,alignment:.top)
             if model.selection.contains(item.id){RoundedRectangle(cornerRadius:5).stroke(Color.accentColor,lineWidth:4);Image(systemName:"checkmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white,Color.accentColor).padding(6)}
@@ -185,7 +186,7 @@ struct GalleryPane:View {
                         else if !model.editing,let url=model.currentURL,url.pathExtension.lowercased()=="gif"{AnimatedPhotoSurface(url:url)}
                         else if model.editing,!viewer.compare,let image=model.editPreview{Image(nsImage:image).resizable().scaledToFit()}
                         else if let url=viewer.compare ? model.original:model.currentURL,let image=NSImage(contentsOf:url){Image(nsImage:image).resizable().scaledToFit()}
-                        else{VStack{ProgressView();Text(model.status).foregroundStyle(.white).font(.caption)}}
+                        else if let files=model.explorer.files{PhotoOriginalLoading(model:model,files:files,item:item)}else{Text(model.originalIssue ?? model.status).foregroundStyle(.white)}
                     }.rotationEffect(.degrees(viewer.rotation)).frame(width:max(100,geometry.size.width-40)*viewer.zoom,height:max(100,geometry.size.height-40)*viewer.zoom).padding(20)
                     .overlay{if model.editing && !viewer.editorTool.isEmpty{Color.clear.contentShape(Rectangle()).gesture(SpatialTapGesture().onEnded{value in let x=min(1,max(0,value.location.x/max(1,geometry.size.width))),y=min(1,max(0,value.location.y/max(1,geometry.size.height)));if viewer.editorTool=="보정" || viewer.editorTool=="적목"{model.draft.retouches.append(PhotoRetouch(x:x,y:y,radius:viewer.brush,redEye:viewer.editorTool=="적목"))}else{model.draft.marks.append(PhotoMarkup(kind:viewer.editorTool,text:viewer.markup,x:x,y:y,color:viewer.markupColor))}})}}}
                 }

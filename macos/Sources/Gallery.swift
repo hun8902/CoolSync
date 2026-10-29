@@ -7,13 +7,21 @@ import Photos
 import PhotosUI
 import MapKit
 
-struct GalleryItem:Identifiable,Decodable {
+struct GalleryItem:Identifiable,Codable {
     let id:String;let name:String;let path:String;let size:Int64;let mime:String;let taken:Int64;let duration:Int64;let width:Int;let height:Int;let album:String;let favorite:Bool;var added:Int64?=nil;var bucket:String?=nil;var live:Bool?=nil
     var video:Bool{mime.hasPrefix("video/")}
     var date:Date?{taken>0 ? Date(timeIntervalSince1970:Double(taken)/1000):nil}
     var remote:RemoteEntry{RemoteEntry(name:name,path:path,directory:false,size:size,modified:0)}
 }
 final class GalleryModel:ObservableObject {
+    let transport=GalleryTransport()
+    @Published var sync=PhotoSyncState()
+    @Published var syncEvents:[PhotoSyncEvent]=[]
+    @Published var thumbnailErrors:[String:String]=[:]
+    var previewRequested=Set<String>()
+    var previewFinished=Set<String>()
+    var catalogPending:[GalleryItem]=[]
+    var readOverride:((String,[String:Any],@escaping([String:Any])->Void)->Void)?
     var store:PhotoLibraryStore
     @Published var libraryDoc=PhotoLibraryDocument()
     @Published var selection=Set<String>()
@@ -54,6 +62,7 @@ final class GalleryModel:ObservableObject {
     @Published var items:[GalleryItem]=[]
     @Published var thumbnails:[String:NSImage]=[:]
     @Published var selected:GalleryItem?
+    @Published var originalIssue:String?
     @Published var original:URL?
     @Published var motion:URL?
     @Published var livePhoto:PHLivePhoto?
@@ -66,12 +75,19 @@ final class GalleryModel:ObservableObject {
     @Published var grouping="모든 사진"
     @Published var tile:Double=160
     @Published var favorites=Set(UserDefaults.standard.stringArray(forKey:"galleryFavorites") ?? [])
-    private var generation=UUID()
-    private var waiting=Set<String>()
-    private var queue:[GalleryItem]=[]
-    private var fetching=false
+    var generation=UUID()
+    var waiting=Set<String>()
+    var queue:[GalleryItem]=[]
+    var fetching=false
     let cache=FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/Gallery",isDirectory:true)
-    init(explorer:ExplorerModel,store:PhotoLibraryStore=PhotoLibraryStore()){self.explorer=explorer;self.store=store;libraryDoc=store.load();try? FileManager.default.createDirectory(at:cache,withIntermediateDirectories:true)}
+    init(explorer:ExplorerModel,store:PhotoLibraryStore=PhotoLibraryStore()){
+        self.explorer=explorer;self.store=store;libraryDoc=store.load();try?FileManager.default.createDirectory(at:cache,withIntermediateDirectories:true)
+        transport.bootstrap={ [weak explorer]completion in explorer?.call("mediaSession",quiet:true,completion:completion) }
+        transport.legacyCatalog={ [weak explorer]fields,completion in
+            explorer?.call("mediaList",fields,quiet:true){result in var result=result;if var rows=result["items"]as?[[String:Any]]{for i in rows.indices{rows[i]["taken"]=rows[i]["date"] ?? 0;rows[i]["album"]=(rows[i]["album"]as?String ?? "").split(separator:"/").last.map(String.init) ?? "기타"};result["items"]=rows};completion(result)}
+        }
+        transport.onState={ [weak self]state in self?.sync.device=state;self?.event("device screen=\(state.interactive), locked=\(state.locked), file access=\(state.storage), battery exempt=\(state.batteryExempt)") }
+    }
     var albums:[String]{Array(Set(items.map{$0.album})).sorted{$0.localizedStandardCompare($1) == .orderedAscending}}
     func favorite(_ item:GalleryItem)->Bool{note(item).favorite ?? (item.favorite || favorites.contains(item.path))}
     func toggle(_ item:GalleryItem){let value = !favorite(item);annotate(item){$0.favorite=value}}
@@ -91,17 +107,22 @@ final class GalleryModel:ObservableObject {
         for item in visible{let key=captureDate(item).map{formatter.string(from:$0)} ?? "촬영일 없음";if result.last?.0==key{result[result.count-1].1.append(item)}else{result.append((key,[item]))}}
         return result
     }
-    func reload(){guard !loading else{return};guard explorer.connected?()==true else{status="휴대폰 연결 후 새로 고침하세요";return};generation=UUID();queue=[];waiting=[];items=[];loading=true;page(0,generation)}
-    private func page(_ offset:Int,_ token:UUID){explorer.call("gallery",["offset":offset],quiet:true){[weak self]r in
-        guard let self,self.generation==token else{return}
-        guard r["ok"]as?Bool==true,let rows=r["items"],let data=try?JSONSerialization.data(withJSONObject:rows),let values=try?JSONDecoder().decode([GalleryItem].self,from:data) else{self.loading=false;self.status=r["error"]as?String ?? "휴대폰 앱도 업데이트하세요";return}
-        let known=Set(self.items.map{$0.id});self.items+=values.filter{!known.contains($0.id)};let next=r["next"]as?Int ?? offset,total=r["total"]as?Int ?? 0;self.status="\(self.items.count) / \(total)개"
-        if next<total && next>offset{self.page(next,token)}else{self.loading=false;self.status="\(self.items.count)개 항목"}
-    }}
-    func thumb(_ item:GalleryItem){if note(item).rendered != nil{if thumbnails[item.id]==nil{refreshEditedThumbnail(item)};return};guard thumbnails[item.id]==nil,!waiting.contains(item.id) else{return};waiting.insert(item.id);queue.append(item);pump()}
-    func cancelThumb(_ item:GalleryItem){queue.removeAll{$0.id==item.id};waiting.remove(item.id)}
-    private func pump(){guard !fetching,!queue.isEmpty else{return};fetching=true;let item=queue.removeFirst(),token=generation
-        explorer.call("galleryThumb",["id":item.id],quiet:true){[weak self]r in guard let self else{return};self.fetching=false;self.waiting.remove(item.id);if token==self.generation,let text=r["image"]as?String,let data=Data(base64Encoded:text),let image=NSImage(data:data){if self.thumbnails.count>600,let first=self.thumbnails.keys.first{self.thumbnails.removeValue(forKey:first)};self.thumbnails[item.id]=image};self.pump()}
+    func reload(){beginPhotoLoad()}
+    func thumb(_ item:GalleryItem){
+        if note(item).rendered != nil{if thumbnails[item.id]==nil{refreshEditedThumbnail(item)};return}
+        guard thumbnails[item.id]==nil,!waiting.contains(item.id),thumbnailErrors[item.id]==nil else{return}
+        if let image=NSImage(contentsOf:thumbnailURL(item)){thumbnails[item.id]=image;return}
+        waiting.insert(item.id);previewRequested.insert(item.id);queue.append(item);thumbnailProgress();pump()
+    }
+    func cancelThumb(_ item:GalleryItem){if queue.contains(where:{$0.id==item.id}){queue.removeAll{$0.id==item.id};waiting.remove(item.id);previewRequested.remove(item.id)};thumbnailProgress()}
+    private func pump(){
+        guard !fetching,!queue.isEmpty else{thumbnailProgress();return};fetching=true;let item=queue.removeFirst(),token=generation;thumbnailProgress()
+        readGallery("galleryThumb",["id":item.id,"path":item.path]){[weak self]response in
+            guard let self,self.generation==token else{return};self.fetching=false;self.waiting.remove(item.id);self.previewFinished.insert(item.id)
+            if response["ok"]as?Bool==true,let text=response["image"]as?String,let data=Data(base64Encoded:text),let image=NSImage(data:data){if self.thumbnails.count>600,let first=self.thumbnails.keys.first{self.thumbnails.removeValue(forKey:first)};self.thumbnails[item.id]=image;try?data.write(to:self.thumbnailURL(item),options:.atomic);self.thumbnailErrors.removeValue(forKey:item.id)}
+            else{self.thumbnailErrors[item.id]=response["error"]as?String ?? "미리보기 응답을 읽지 못했습니다";self.event("preview failed: "+(response["code"]as?String ?? "decode"))}
+            self.thumbnailProgress();self.pump()
+        }
     }
     func open(_ item:GalleryItem){
         // Keep downloaded originals bounded; only CoolSync's own cache is touched.
@@ -110,10 +131,10 @@ final class GalleryModel:ObservableObject {
             var bytes=ordered.reduce(Int64(0)){$0+Int64((try?$1.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0)}
             for url in ordered where bytes>1_000_000_000{let size=Int64((try?url.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0);if url != original && url != motion{try?FileManager.default.removeItem(at:url);bytes-=size}}
         }
-        selected=item;original=nil;motion=nil;livePhoto=nil;status="원본 불러오는 중…"
+        selected=item;originalIssue=nil;original=nil;motion=nil;livePhoto=nil;status="원본 불러오는 중…"
         fetch(item,valid:{[weak self] in self?.selected?.id==item.id}){[weak self]result in
             guard let self,self.selected?.id==item.id else{return}
-            do{let target=try result.get();self.original=target;self.status=item.name;self.readMetadata(target,item:item);if self.editAfterOpen{self.editAfterOpen=false;self.beginEditing()};if !item.video{self.extractMotion(target,item.id);self.loadLivePair(item,target)}}catch{self.status=error.localizedDescription;self.editAfterOpen=false}
+            do{let target=try result.get();self.original=target;self.status=item.name;self.readMetadata(target,item:item);if self.editAfterOpen{self.editAfterOpen=false;self.beginEditing()};if !item.video{self.extractMotion(target,item.id);self.loadLivePair(item,target)}}catch{self.status=error.localizedDescription;self.originalIssue=error.localizedDescription;self.editAfterOpen=false}
         }
     }
     private func loadLivePair(_ item:GalleryItem,_ still:URL){let token=librarySession;
@@ -140,6 +161,6 @@ final class GalleryModel:ObservableObject {
         DispatchQueue.main.async{if self.librarySession==token,self.selected?.id==id{self.motion=found;if found != nil,let path=self.selected?.path{self.motionPaths.insert(path);var a=self.libraryDoc.annotations[path] ?? PhotoAnnotation();if !a.labels.contains("live"){a.labels.append("live")};self.libraryDoc.annotations[path]=a;self.persist()}}}
     }}
     func step(_ delta:Int){let list=slideshow ? slideshowItems:visible;guard let id=selected?.id,let index=list.firstIndex(where:{$0.id==id}),list.indices.contains(index+delta)else{return};open(list[index+delta])}
-    func disconnect(){activeExport?.cancelExport();activeExport=nil;saving=false;previewWork?.cancel();librarySession=UUID();analysisStop=true;analysisRunning=false;unlocked=false;slideshow=false;editing=false;selection=[];downloaded=[:];generation=UUID();loading=false;selected=nil;original=nil;motion=nil;livePhoto=nil;items=[];queue=[];waiting=[];thumbnails=[:];status="휴대폰 연결이 끊겼습니다"}
+    func disconnect(){transport.invalidate();sync.phase = .disconnected;sync.message="휴대폰 연결이 끊겼습니다 · 재연결을 기다립니다";sync.issueCode="disconnected";fetching=false;activeExport?.cancelExport();activeExport=nil;saving=false;previewWork?.cancel();librarySession=UUID();analysisStop=true;analysisRunning=false;unlocked=false;slideshow=false;editing=false;selection=[];downloaded=[:];generation=UUID();loading=false;selected=nil;original=nil;motion=nil;livePhoto=nil;items=[];queue=[];waiting=[];thumbnails=[:];status="휴대폰 연결이 끊겼습니다"}
     func export(){guard let original,let selected else{return};let panel=NSSavePanel();panel.nameFieldStringValue=selected.name;if panel.runModal() == .OK,let url=panel.url{do{if FileManager.default.fileExists(atPath:url.path){try FileManager.default.removeItem(at:url)};try FileManager.default.copyItem(at:original,to:url)}catch{status=error.localizedDescription}}}
 }

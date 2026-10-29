@@ -37,6 +37,7 @@ class SyncService : Service() {
     private data class Chunk(val bytes: ByteArray, val clipID: String? = null)
     private val chunks = ArrayDeque<Chunk>()
     private var inFlightID: String? = null
+    private var outboundPower:AutoCloseable?=null
     private var sending = false
     private var pending: JSONObject? = null
     private var retries = 0
@@ -234,18 +235,21 @@ class SyncService : Service() {
         val d = peer ?: return; if(!subscribed) return
         val key = Protocol.key(this) ?: return
         val bytes = Protocol.seal(key,m)
-        if(chunks.sumOf { it.bytes.size } + bytes.size > 280000) { server?.cancelConnection(d); return }
+        if(outboundPower==null)outboundPower=TransferPower.acquire(this,timeoutMillis=15000)
+        if(chunks.sumOf { it.bytes.size } + bytes.size > 280000) { outboundPower?.close();outboundPower=null;server?.cancelConnection(d); return }
         val split = bytes.asList().chunked((mtu-3).coerceAtMost(180))
         split.forEachIndexed { index, part -> chunks.addLast(Chunk(part.toByteArray(),if(index == split.lastIndex && m.optString("type") == "clip") m.optString("id") else null)) }; pump()
     }
     private fun pump() {
-        if(sending || chunks.isEmpty()) return
+        if(sending)return
+        if(chunks.isEmpty()){outboundPower?.close();outboundPower=null;return}
         val d = peer ?: return; val c = tx ?: return
         val chunk = chunks.removeFirst(); c.value = chunk.bytes; inFlightID = chunk.clipID; sending = true
         if(server?.notifyCharacteristicChanged(d,c,true) != true) { sending = false; sendTimeout.run() }
         else main.postDelayed(sendTimeout,8000)
     }
     private fun resetPeer() {
+        GalleryServer.close();outboundPower?.close();outboundPower=null
         peer = null; authenticated = false;connecting=false; subscribed = false; pendingHello=null;handshakeAck=""; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null
         main.removeCallbacks(ackTimeout);main.removeCallbacks(linkTimeout);main.removeCallbacks(sendTimeout)

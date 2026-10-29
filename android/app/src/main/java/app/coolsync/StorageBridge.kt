@@ -21,8 +21,8 @@ object StorageBridge {
     fun handle(service:SyncService,message:JSONObject) {
         val sessionKey=Protocol.key(service) ?: return
         val reference=message.optString("ref")
+        val power=TransferPower.acquire(service)
         worker.execute {
-            val power=TransferPower.acquire(service)
             try {
             val response=JSONObject()
             try {
@@ -38,6 +38,9 @@ object StorageBridge {
                 }
                 response.put("ok",true)
                 when(q.getString("op")) {
+                    "mediaSession","galleryConnect" -> response.put("endpoint",GalleryServer.open(service))
+                    "mediaClose","galleryClose" -> GalleryServer.close()
+                    "galleryState" -> response.put("state",GalleryServer.state(service))
                     "gallery" -> GalleryMedia.list(service,q,response)
                     "galleryThumb" -> GalleryMedia.thumbnail(service,q,response)
                     "gallerySystemTrash" -> GalleryMedia.systemTrash(service,q,response)

@@ -19,7 +19,7 @@ final class DashboardModel: ObservableObject {
     @Published var keyHex=""
     let files=FileTransfer()
     let explorer=ExplorerModel()
-    lazy var gallery=GalleryModel(explorer:explorer)
+    lazy var gallery:GalleryModel={let gallery=GalleryModel(explorer:explorer);gallery.transport.key={ [weak self]in self?.engine?.key ?? Data() };return gallery}()
     let clipboardState=ClipboardPaneState()
     let history:ClipHistory
     var engine: SyncEngine?
@@ -33,7 +33,7 @@ final class DashboardModel: ObservableObject {
             value.changed={ [weak self, weak value] status in
                 guard let self, let value else { return }; let wasConnected=self.connected; self.status=status; if status.contains("실패") || status.contains("시간 초과") || status.contains("권한") { self.connectionIssue=status }; if value.authenticated { self.connectionIssue="" }; self.connected=value.authenticated;self.connecting=value.connecting; self.name=value.peerName; self.model=value.peerModel; self.system=value.peerOS; self.lastSync=value.lastSync; self.onStatus?(status)
                 if wasConnected && !value.authenticated { self.gallery.disconnect(); self.explorer.connectionEnded() }
-                if value.authenticated { self.pairing=false; if !wasConnected { self.gallery.useLibrary(identity:value.key.base64EncodedString()); self.explorer.reload(); if self.tab==4{self.gallery.reload()} } }
+                if value.authenticated { self.pairing=false; if !wasConnected { self.gallery.useLibrary(identity:value.key.base64EncodedString()); if self.tab==1{self.explorer.reload()}; if self.tab==4{self.gallery.reload()} } }
             }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
             value.filesystemMessage={ [weak self] message in if message.type=="galleryChanged"{self?.gallery.reload();if self?.gallery.category=="최근 삭제된 항목"{self?.gallery.loadDeleted()}}else{self?.explorer.handle(message)} }

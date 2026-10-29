@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 import MapKit
 
 extension GalleryModel {
-    func useLibrary(identity:String){let key=SHA256.hash(data:Data(identity.utf8)).map{String(format:"%02x",$0)}.joined();guard libraryIdentity != key else{return};libraryIdentity=key;if UserDefaults.standard.string(forKey:"galleryFavoriteOwner")==nil{UserDefaults.standard.set(key,forKey:"galleryFavoriteOwner")};if UserDefaults.standard.string(forKey:"galleryFavoriteOwner") != key{favorites=[]};librarySession=UUID();analysisStop=true;analysisRunning=false;store=PhotoLibraryStore(folder:FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/PhotoLibrary/"+key));libraryDoc=store.load();undoDocuments=[];redoDocuments=[];unlocked=false}
+    func useLibrary(identity:String){let key=SHA256.hash(data:Data(identity.utf8)).map{String(format:"%02x",$0)}.joined();guard libraryIdentity != key else{return};libraryIdentity=key;if UserDefaults.standard.string(forKey:"galleryFavoriteOwner")==nil{UserDefaults.standard.set(key,forKey:"galleryFavoriteOwner")};if UserDefaults.standard.string(forKey:"galleryFavoriteOwner") != key{favorites=[]};librarySession=UUID();analysisStop=true;analysisRunning=false;store=PhotoLibraryStore(folder:FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/PhotoLibrary/"+key));libraryDoc=store.load();sync=PhotoSyncState();syncEvents=[];readCatalogCache();undoDocuments=[];redoDocuments=[];unlocked=false}
 
     func note(_ item:GalleryItem)->PhotoAnnotation{libraryDoc.annotations[item.path] ?? PhotoAnnotation()}
     func title(_ item:GalleryItem)->String{let value=note(item).title;return value.isEmpty ? item.name:value}
