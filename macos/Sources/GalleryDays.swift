@@ -16,10 +16,10 @@ extension GalleryModel {
         var result=grouped.keys.sorted(by:>).map{day->GalleryDaySection in
             let title:String
             if day==today{title="오늘"}else if day==yesterday{title="어제"}else{formatter.dateFormat=calendar.component(.year,from:day)==calendar.component(.year,from:now) ? "M월 d일":"yyyy년 M월 d일";title=formatter.string(from:day)}
-            let values=grouped[day,default:[]].sorted{left,right in let a=captureDate(left)!,b=captureDate(right)!;if a != b{return a>b};return (Int64(left.id) ?? 0)>(Int64(right.id) ?? 0)}
+            let values=grouped[day,default:[]].sorted{left,right in let a=captureDate(left)!,b=captureDate(right)!;if a != b{return a>b};return left.orderingID>right.orderingID}
             return GalleryDaySection(id:String(day.timeIntervalSince1970),date:day,title:title,items:values)
         }
-        if !unknown.isEmpty{unknown.sort{(Int64($0.id) ?? 0)>(Int64($1.id) ?? 0)};result.append(GalleryDaySection(id:"unknown",date:nil,title:"촬영일 없음",items:unknown))}
+        if !unknown.isEmpty{unknown.sort{$0.orderingID>$1.orderingID};result.append(GalleryDaySection(id:"unknown",date:nil,title:"촬영일 없음",items:unknown))}
         return result
     }
 }

@@ -8,6 +8,7 @@ struct PhotoSyncState {
     var phase:PhotoSyncPhase = .idle
     var received=0;var total:Int?;var pages=0;var nextOffset=0
     var started:Date?;var updated:Date?;var message="사진 보관함을 열면 휴대폰 목록을 불러옵니다"
+    var dateWarning:String?
     var issue:String?;var issueCode="";var cached=false
     var previewRequested=0;var previewFinished=0;var previewFailed=0
     var device:GalleryDeviceState?
@@ -26,7 +27,7 @@ extension GalleryModel {
         if loading{return}
         guard explorer.connected?()==true else{sync.phase = .disconnected;sync.message="휴대폰 연결을 기다리고 있습니다";sync.issue="CoolSync의 연결 화면에서 휴대폰 연결 상태를 확인하세요";sync.issueCode="disconnected";status=sync.message;event("disconnected before catalog request");return}
         generation=UUID();queue=[];waiting=[];fetching=false;previewRequested=[];previewFinished=[];thumbnailErrors=[:];sync.previewRequested=0;sync.previewFinished=0;sync.previewFailed=0
-        loading=true;sync.started=Date();sync.issue=nil;sync.issueCode="";sync.phase = .connecting;sync.message="휴대폰 사진 연결 준비 중…";status=sync.message
+        loading=true;sync.dateWarning=nil;sync.started=Date();sync.issue=nil;sync.issueCode="";sync.phase = .connecting;sync.message="휴대폰 사진 연결 준비 중…";status=sync.message
         if !resume{sync.nextOffset=0;sync.received=0;sync.pages=0;sync.total=nil;catalogPending=[];transport.invalidate()}else{catalogPending=items}
         event(resume ? "resume catalog at \(sync.nextOffset)":"start catalog refresh")
         page(resume ? sync.nextOffset:0,generation)
@@ -43,6 +44,7 @@ extension GalleryModel {
             do{
                 guard let rows=response["items"]else{throw GalleryNetworkError.unavailable("사진 응답에 목록이 없습니다 · Android와 Mac을 함께 업데이트하세요")}
                 let data=try JSONSerialization.data(withJSONObject:rows);let values=try JSONDecoder().decode([GalleryItem].self,from:data)
+                if let source=response["dateStatus"]as?String{self.event("date source: Samsung \(source), matched \(response["samsungDates"]as?Int ?? 0)/\(values.count), original recovered \(response["originalDates"]as?Int ?? 0)");if !["available","empty"].contains(source){self.sync.dateWarning="삼성 전용 날짜 DB 접근 불가 (\(source)) · 기본 목록·원본 촬영일로 표시 중"}}
                 let next=(response["next"]as?NSNumber)?.intValue ?? offset+values.count,total=(response["total"]as?NSNumber)?.intValue ?? next
                 guard next>=offset,total>=0,next<=total,next>offset || next>=total else{throw GalleryNetworkError.unavailable("사진 목록의 다음 페이지 정보가 올바르지 않습니다")}
                 let known=Set(self.catalogPending.map{$0.id});self.catalogPending+=values.filter{!known.contains($0.id)};self.items=self.catalogPending

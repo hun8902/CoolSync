@@ -39,6 +39,16 @@ object GalleryMedia {
                 rows.put(row);next++;if(rows.length()>=limit)break
             }while(cur.moveToNext())
         }
+        val paths=(0 until rows.length()).map{File(root,rows.getJSONObject(it).getString("path")).path}
+        val samsung=SamsungGalleryDates.read(c.contentResolver,paths)
+        var matched=0
+        for(i in 0 until rows.length()) {
+            val row=rows.getJSONObject(i);val date=samsung.entries[paths[i]]
+            if(date!=null){row.put("taken",date.time).put("galleryOrder",date.order).put("dateSource","samsung_datetime");matched++}
+            else if(row.optLong("taken")<=0){val original=OriginalGalleryDates.read(File(paths[i]),row.getString("mime"));row.put("taken",original.time).put("dateSource",original.source)}
+            else row.put("dateSource","media_datetaken")
+        }
+        out.put("dateStatus",samsung.status).put("samsungDates",matched).put("originalDates",(0 until rows.length()).count{rows.getJSONObject(it).optString("dateSource").startsWith("original_")})
         out.put("items",rows).put("next",next).put("total",total)
     }
     fun systemTrash(c:Context,q:JSONObject,out:JSONObject){

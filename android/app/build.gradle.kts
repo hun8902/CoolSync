@@ -14,4 +14,4 @@ android {
 }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 
-dependencies { implementation("com.journeyapps:zxing-android-embedded:4.3.0") }
+dependencies { implementation("androidx.exifinterface:exifinterface:1.4.2"); implementation("com.journeyapps:zxing-android-embedded:4.3.0") }

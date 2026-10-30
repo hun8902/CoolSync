@@ -1,1 +1,1 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><activity android:name=".HistoryFixtureActivity" android:exported="true" /></application></manifest>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><activity android:name=".SamsungDateFixtureActivity" android:exported="true" /><activity android:name=".HistoryFixtureActivity" android:exported="true" /></application></manifest>

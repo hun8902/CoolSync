@@ -53,7 +53,7 @@ struct GalleryPane:View {
     var body:some View{
         HStack(spacing:0){
             if viewer.showSidebar && model.selected==nil && !model.slideshow{sidebar;Divider()}
-            VStack(spacing:0){toolbar;Divider();if model.selected==nil && (model.sync.busy || model.sync.phase == .failed || model.sync.phase == .disconnected || model.sync.phase == .canceled || model.sync.cached || model.sync.previewFailed>0){PhotoLoadingPanel(model:model)};content;footer}
+            VStack(spacing:0){toolbar;Divider();if model.selected==nil && (model.sync.busy || model.sync.phase == .failed || model.sync.phase == .disconnected || model.sync.phase == .canceled || model.sync.cached || model.sync.dateWarning != nil || model.sync.previewFailed>0){PhotoLoadingPanel(model:model)};content;footer}
         }.background(Color(nsColor:.windowBackgroundColor))
         .onAppear{model.ensureLoaded()}
         .onDisappear{viewer.player?.pause();viewer.music?.stop();model.slideshow=false}
