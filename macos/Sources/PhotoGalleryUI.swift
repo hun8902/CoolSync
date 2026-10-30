@@ -57,6 +57,7 @@ struct GalleryPane:View {
         }.background(Color(nsColor:.windowBackgroundColor))
         .onAppear{model.ensureLoaded()}
         .onDisappear{viewer.player?.pause();viewer.music?.stop();model.slideshow=false}
+        .onReceive(NotificationCenter.default.publisher(for:.NSCalendarDayChanged)){_ in model.objectWillChange.send()}
         .onChange(of:model.original){_ in configurePlayer()}
         .onChange(of:model.currentURL){_ in if !model.editing{configurePlayer()}}
         .onChange(of:model.selected?.id){_ in viewer.player?.pause();viewer.player=nil;viewer.live=false;viewer.zoom=1;viewer.rotation=0;viewer.slideElapsed=0}
@@ -126,7 +127,7 @@ struct GalleryPane:View {
                 Button{model.tile=max(90,model.tile-20)}label:{Image(systemName:"minus")}
                 Button{model.tile=min(300,model.tile+20)}label:{Image(systemName:"plus")}
                 if model.category=="보관함" || model.category.hasPrefix("앨범:"){
-                    Picker("",selection:$model.grouping){ForEach(["년","월","모든 사진"],id:\.self){Text($0)}}.pickerStyle(.segmented).frame(width:180)
+                    Picker("",selection:$model.grouping){ForEach(["년","월","모든 사진","날짜별"],id:\.self){Text($0)}}.pickerStyle(.segmented).frame(width:250).help("날짜별: 오늘·어제·촬영일 최신순으로 정사각형 사진을 모아 봅니다")
                 }
                 Menu{Toggle("정사각형 사진",isOn:$viewer.square);Toggle("제목 보기",isOn:$viewer.titles);Divider();Picker("정렬",selection:$model.sort){Text("촬영일").tag("촬영일");Text("제목").tag("제목");Text("파일명").tag("이름")};Toggle("오름차순",isOn:$model.ascending)}label:{Image(systemName:"line.3.horizontal.decrease")}
                 actionsMenu
@@ -154,26 +155,29 @@ struct GalleryPane:View {
         else if model.category=="중복된 항목"{duplicatesView}
         else{library}
     }
-    private var library:some View{ScrollViewReader{proxy in ScrollView{
-        if model.grouping != "모든 사진",model.category=="보관함"{timeline}
-        else{LazyVGrid(columns:[GridItem(.adaptive(minimum:model.tile),spacing:12)],spacing:16){ForEach(model.visible){item in cell(item)}}.padding(18)}
-        if model.visible.isEmpty{empty(model.items.isEmpty ? "휴대폰 사진 목록을 확인했습니다 · 사진과 동영상이 없습니다":"선택한 조건과 일치하는 사진이 없습니다",icon:"photo.on.rectangle")}
-    }.background(Color(nsColor:.textBackgroundColor)).overlay(alignment:.trailing){if viewer.info,let item=model.targets.first{PhotoInfoPane(model:model,item:item,viewer:viewer).frame(width:300).background(.regularMaterial).padding(12)}}}}
+    private var library:some View{Group{
+        if model.grouping=="날짜별"{GalleryDailyGrid(model:model){item,side in cell(item,compact:true,side:side)}}
+        else{ScrollView{
+            if model.grouping != "모든 사진",model.category=="보관함"{timeline}
+            else{LazyVGrid(columns:[GridItem(.adaptive(minimum:model.tile),spacing:12)],spacing:16){ForEach(model.visible){item in cell(item)}}.padding(18)}
+            if model.visible.isEmpty{empty(model.items.isEmpty ? "휴대폰 사진 목록을 확인했습니다 · 사진과 동영상이 없습니다":"선택한 조건과 일치하는 사진이 없습니다",icon:"photo.on.rectangle")}
+        }.background(Color(nsColor:.textBackgroundColor))}
+    }.overlay(alignment:.trailing){if viewer.info,let item=model.targets.first{PhotoInfoPane(model:model,item:item,viewer:viewer).frame(width:300).background(.regularMaterial).padding(12)}}}
     private var timeline:some View{LazyVGrid(columns:[GridItem(.adaptive(minimum:300),spacing:18)],spacing:20){ForEach(Array(model.sections.enumerated()),id:\.offset){_,section in
         Button{if let item=section.1.first,let date=model.captureDate(item){let f=DateFormatter();f.dateFormat=model.grouping=="년" ? "yyyy":"yyyy-MM";model.timelinePrefix=f.string(from:date)};model.grouping="모든 사진"}label:{ZStack(alignment:.bottomLeading){if let item=section.1.first,let image=model.thumbnails[item.id]{Image(nsImage:image).resizable().scaledToFill().frame(height:250).clipped()}else{Rectangle().fill(.quaternary).frame(height:250)};LinearGradient(colors:[.clear,.black.opacity(0.8)],startPoint:.center,endPoint:.bottom);VStack(alignment:.leading){Text(section.0).font(.title.bold());Text("\(section.1.count)개 항목").font(.caption)}.foregroundStyle(.white).padding(16)}.clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).onAppear{if let item=section.1.first{model.thumb(item)}}
     }}.padding(18)}
-    private func cell(_ item:GalleryItem)->some View{
+    private func cell(_ item:GalleryItem,compact:Bool=false,side:Double?=nil)->some View{
         VStack(spacing:5){ZStack(alignment:.bottomTrailing){
-            Group{if let image=model.thumbnails[item.id]{if viewer.square{Image(nsImage:image).resizable().scaledToFill()}else{Image(nsImage:image).resizable().scaledToFit()}}else{RoundedRectangle(cornerRadius:4).fill(.quaternary).overlay{if model.thumbnailErrors[item.id] != nil{VStack(spacing:8){Image(systemName:"exclamationmark.triangle").foregroundStyle(.orange);Text("미리보기 실패").font(.caption);Button("다시 받기"){model.retryThumbnail(item)}.buttonStyle(.borderless)}}else{VStack(spacing:8){ProgressView().controlSize(.small);Text("미리보기 받는 중").font(.caption).foregroundStyle(.secondary)}}}}}.frame(height:model.tile).frame(maxWidth:.infinity).clipped()
+            Group{if let image=model.thumbnails[item.id]{if viewer.square || compact{Image(nsImage:image).resizable().scaledToFill()}else{Image(nsImage:image).resizable().scaledToFit()}}else{RoundedRectangle(cornerRadius:4).fill(.quaternary).overlay{if model.thumbnailErrors[item.id] != nil{VStack(spacing:8){Image(systemName:"exclamationmark.triangle").foregroundStyle(.orange);Text("미리보기 실패").font(.caption);Button("다시 받기"){model.retryThumbnail(item)}.buttonStyle(.borderless)}}else{VStack(spacing:8){ProgressView().controlSize(.small);Text("미리보기 받는 중").font(.caption).foregroundStyle(.secondary)}}}}}.frame(width:side.map { CGFloat($0) },height:side ?? model.tile).frame(maxWidth:.infinity).clipped()
             if item.video{Text(String(format:"%d:%02d",item.duration/60000,item.duration/1000%60)).font(.caption.bold()).padding(5).foregroundStyle(.white).shadow(radius:3)}
             HStack{if model.favorite(item){Image(systemName:"heart.fill")};if model.note(item).edit != nil{Image(systemName:"slider.horizontal.3")};Spacer();if item.live==true || model.motionPaths.contains(item.path) || model.note(item).labels.contains("live"){Image(systemName:"livephoto")}}.font(.caption).foregroundStyle(.white).shadow(radius:3).padding(6).frame(maxHeight:.infinity,alignment:.top)
-            if model.selection.contains(item.id){RoundedRectangle(cornerRadius:5).stroke(Color.accentColor,lineWidth:4);Image(systemName:"checkmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white,Color.accentColor).padding(6)}
-        }.clipShape(RoundedRectangle(cornerRadius:5)).contentShape(Rectangle())
+            if model.selection.contains(item.id){RoundedRectangle(cornerRadius:compact ? 0:5).stroke(Color.accentColor,lineWidth:4);Image(systemName:"checkmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white,Color.accentColor).padding(6)}
+        }.clipShape(RoundedRectangle(cornerRadius:compact ? 0:5)).contentShape(Rectangle())
         .onTapGesture(count:2){model.open(item)}.onTapGesture{model.select(item)}
         .onDrag{model.dragProvider(item)}.contextMenu{photoMenu(item)}
         .onAppear{model.thumb(item)}.onDisappear{model.cancelThumb(item)}
-        if viewer.titles{Text(model.title(item)).font(.caption).lineLimit(1)}
-        }.id(item.id).accessibilityLabel(model.title(item)).accessibilityAddTraits(model.selection.contains(item.id) ? .isSelected:[])
+        if viewer.titles && !compact{Text(model.title(item)).font(.caption).lineLimit(1)}
+        }.id(item.id).accessibilityLabel(model.title(item)).accessibilityValue(Text(model.selection.contains(item.id) ? "선택됨":""))
     }
     private func detail(_ item:GalleryItem)->some View{
         HStack(spacing:0){
