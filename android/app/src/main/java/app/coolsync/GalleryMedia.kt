@@ -11,12 +11,12 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.io.File
 
-/** Read-only catalog: capture date is never replaced by transfer or modification time. */
+/** Read-only catalog using capture time, or the preserved public file date when capture time is absent. */
 object GalleryMedia {
     fun list(c:Context,q:JSONObject,out:JSONObject) {
         val root=Environment.getExternalStorageDirectory().canonicalFile
-        // Same lightweight MediaStore projection as the pre-removal gallery; no original-file scan.
-        val base=arrayOf("_id","_data","_display_name","mime_type","_size","datetaken","width","height","duration","date_added","is_favorite")
+        // Read the public file date too: downloaded/restored images can have no capture timestamp.
+        val base=arrayOf("_id","_data","_display_name","mime_type","_size","datetaken","width","height","duration","date_added","is_favorite","date_modified")
         val uri=MediaStore.Files.getContentUri("external")
         val where="media_type IN (1,3) AND is_pending=0 AND is_trashed=0 AND _data LIKE ?"
         val args=arrayOf(root.path+"/%")
@@ -34,7 +34,7 @@ object GalleryMedia {
                 val index=cur.getColumnIndex("xmp");val xmp=if(index>=0)runCatching{cur.getBlob(index)?.toString(Charsets.UTF_8) ?: ""}.getOrDefault("")else ""
                 val live=Regex("""(?:MotionPhoto|MicroVideo)\s*=\s*["']1["']""").containsMatchIn(xmp) || xmp.contains(":MotionPhoto>1<") || (!mime.startsWith("video/") && listOf("mov","MOV").any{File(file.parentFile,file.nameWithoutExtension+"."+it).isFile})
                 val album=path.substringBeforeLast('/',"")
-                val row=JSONObject().put("id",cur.getLong(0).toString()).put("name",cur.getString(2) ?: file.name).put("path",path).put("size",cur.getLong(4)).put("mime",mime).put("taken",cur.getLong(5)).put("width",cur.getInt(6)).put("height",cur.getInt(7)).put("duration",cur.getLong(8)).put("added",cur.getLong(9)*1000).put("favorite",cur.getInt(10)==1).put("album",album.substringAfterLast('/').ifEmpty{"기타"}).put("bucket",album).put("live",live)
+                val row=JSONObject().put("id",cur.getLong(0).toString()).put("name",cur.getString(2) ?: file.name).put("path",path).put("size",cur.getLong(4)).put("mime",mime).put("taken",MediaDates.display(cur.getLong(5),cur.getLong(11))).put("width",cur.getInt(6)).put("height",cur.getInt(7)).put("duration",cur.getLong(8)).put("added",cur.getLong(9)*1000).put("favorite",cur.getInt(10)==1).put("album",album.substringAfterLast('/').ifEmpty{"기타"}).put("bucket",album).put("live",live)
                 if(rows.length()>0 && rows.toString().toByteArray().size+row.toString().toByteArray().size>maxBytes)break
                 rows.put(row);next++;if(rows.length()>=limit)break
             }while(cur.moveToNext())
