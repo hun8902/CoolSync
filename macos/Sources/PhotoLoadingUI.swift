@@ -8,7 +8,6 @@ struct PhotoLoadingPanel:View {
             if model.sync.busy{ProgressView().controlSize(.small).padding(.top,2)}else{Image(systemName:model.sync.phase == .failed ? "exclamationmark.triangle.fill":model.sync.phase == .disconnected ? "iphone.slash":"checkmark.circle").foregroundStyle(model.sync.phase == .failed ? Color.red:Color.accentColor)}
             VStack(alignment:.leading,spacing:5){
                 Text(model.sync.message).font(.callout.weight(.semibold))
-                if let warning=model.sync.dateWarning{Text(warning).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
                 if let issue=model.sync.issue{Text(issue).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)}
                 if model.loading{TimelineView(.periodic(from:.now,by:1)){context in Text("경과 \(Int(context.date.timeIntervalSince(model.sync.started ?? context.date)))초 · 목록 \(model.sync.received)개 · 완료한 페이지 \(model.sync.pages)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)}}
                 else if model.sync.previewRequested>0{Text("미리보기 \(model.sync.previewFinished)/\(model.sync.previewRequested)개 · 실패 \(model.sync.previewFailed)개").font(.caption.monospacedDigit()).foregroundStyle(.secondary)}

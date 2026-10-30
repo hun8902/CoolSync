@@ -2,7 +2,6 @@
     <permission android:name="app.coolsync.INTERNAL" android:protectionLevel="signature" />
     <uses-permission android:name="app.coolsync.INTERNAL" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="com.samsung.android.providers.media.READ" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -15,7 +14,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
-    <queries><provider android:authorities="secmedia" /><intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent></queries>
+    <queries><intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent></queries>
     <application android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:dataExtractionRules="@xml/backup_rules" android:fullBackupContent="false" android:label="CoolSync" android:theme="@style/CoolSyncTheme" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true">
         <provider android:name=".ClipboardImageProvider" android:authorities="${applicationId}.clipboard" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".UpdateFileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true" />

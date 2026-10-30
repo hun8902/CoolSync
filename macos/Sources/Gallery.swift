@@ -8,9 +8,8 @@ import PhotosUI
 import MapKit
 
 struct GalleryItem:Identifiable,Codable {
-    let id:String;let name:String;let path:String;let size:Int64;let mime:String;let taken:Int64;let duration:Int64;let width:Int;let height:Int;let album:String;let favorite:Bool;var added:Int64?=nil;var bucket:String?=nil;var live:Bool?=nil;var galleryOrder:Int64?=nil;var dateSource:String?=nil
+    let id:String;let name:String;let path:String;let size:Int64;let mime:String;let taken:Int64;let duration:Int64;let width:Int;let height:Int;let album:String;let favorite:Bool;var added:Int64?=nil;var bucket:String?=nil;var live:Bool?=nil
     var video:Bool{mime.hasPrefix("video/")}
-    var orderingID:Int64{galleryOrder ?? Int64(id) ?? 0}
     var date:Date?{taken>0 ? Date(timeIntervalSince1970:Double(taken)/1000):nil}
     var remote:RemoteEntry{RemoteEntry(name:name,path:path,directory:false,size:size,modified:0)}
 }
@@ -95,11 +94,11 @@ final class GalleryModel:ObservableObject {
     var visible:[GalleryItem]{
         let duplicates=category=="중복된 항목" ? duplicatePaths:Set<String>()
         return items.filter{item in (category=="중복된 항목" ? duplicates.contains(item.path) && !note(item).hidden:matches(item,category)) && searchMatch(item) && (timelinePrefix.isEmpty || captureDate(item).map{let f=DateFormatter();f.dateFormat="yyyy-MM";return f.string(from:$0).hasPrefix(timelinePrefix)}==true)}.sorted{a,b in
-            if grouping=="날짜별"{let left=captureDate(a),right=captureDate(b);if left != right{guard let left else{return false};guard let right else{return true};return left>right};return a.orderingID>b.orderingID}
+            if grouping=="날짜별"{let left=captureDate(a),right=captureDate(b);if left != right{guard let left else{return false};guard let right else{return true};return left>right};return (Int64(a.id) ?? 0)>(Int64(b.id) ?? 0)}
             if category=="최근 저장된 항목",a.added != b.added{return (a.added ?? 0)>(b.added ?? 0)}
             if sort=="제목" || sort=="이름"{let c=(sort=="제목" ? title(a):a.name).localizedStandardCompare(sort=="제목" ? title(b):b.name);if c != .orderedSame{return ascending ? c == .orderedAscending:c == .orderedDescending}}
             else{let left=captureDate(a),right=captureDate(b);if left != right{guard let left else{return false};guard let right else{return true};return ascending ? left<right:left>right}}
-            return ascending ? a.orderingID<b.orderingID:a.orderingID>b.orderingID
+            return ascending ? (Int64(a.id) ?? 0)<(Int64(b.id) ?? 0):(Int64(a.id) ?? 0)>(Int64(b.id) ?? 0)
         }
     }
     var sections:[(String,[GalleryItem])]{
