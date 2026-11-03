@@ -278,7 +278,7 @@ final class AppDelegate:NSObject,NSApplicationDelegate,UNUserNotificationCenterD
         let update=NSMenuItem(title:"업데이트 확인…",action:#selector(checkUpdate),keyEquivalent:"");update.target=self;menu.addItem(update)
         let quit=NSMenuItem(title:"종료",action:#selector(quit),keyEquivalent:"q"); quit.target=self; menu.addItem(quit); item.menu=menu
         model.onStatus={ [weak self] value in guard let self else { return }; self.statusItem.title=self.model.connected ? "\(self.model.name) · 연결됨" : value }
-        window=NSWindow(contentRect:NSRect(x:0,y:0,width:1040,height:700),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
+        window=CoolSyncWindow(contentRect:NSRect(x:0,y:0,width:1040,height:700),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.title="CoolSync"; window.titlebarAppearsTransparent=true; window.isReleasedWhenClosed=false; window.minSize=NSSize(width:900,height:560)
         window.contentViewController=NSHostingController(rootView:CoolDashboard(model:model)); window.center(); show()
         if !CommandLine.arguments.contains("--preview"){MacUpdates.shared.start()}

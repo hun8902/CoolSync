@@ -73,7 +73,7 @@ struct GalleryPane:View {
     private func advanceMovie(){guard let index=model.slideshowItems.firstIndex(where:{$0.id==model.selected?.id}),index+1<model.slideshowItems.count else{model.slideshow=false;return};model.open(model.slideshowItems[index+1])}
     private var sidebar:some View{
         ScrollView{VStack(alignment:.leading,spacing:4){
-            Button{exit?()}label:{HStack{Image(systemName:"chevron.left");Text("CoolSync");Spacer()}}.buttonStyle(.plain).padding(.bottom,12)
+            GalleryBackButton(action:{exit?()}).padding(.bottom,12)
             nav("보관함","photo.on.rectangle");nav("모음","rectangle.stack")
             heading("고정됨")
             nav("즐겨찾기","heart");nav("최근 저장된 항목","clock.arrow.circlepath");nav("지도","map");nav("비디오","video");nav("Live Photo","livephoto");nav("스크린샷","viewfinder");nav("최근 삭제된 항목","trash",locked:true);nav("사람들","person.crop.circle");nav("가려진 항목","eye.slash",locked:true)
@@ -107,7 +107,7 @@ struct GalleryPane:View {
         HStack(spacing:12){
             if model.selected==nil{Button{viewer.showSidebar.toggle()}label:{Image(systemName:"sidebar.left")}.help("사이드바 표시")}
             if let item=model.selected{
-                Button{viewer.player?.pause();model.selected=nil;model.editing=false;model.slideshow=false}label:{Image(systemName:"chevron.left").frame(width:30,height:30).background(Color.primary.opacity(0.08),in:Circle())}.keyboardShortcut(.escape,modifiers:[])
+                Button{viewer.player?.pause();model.selected=nil;model.editing=false;model.slideshow=false}label:{Image(systemName:"chevron.left").frame(width:40,height:40).background(Color.primary.opacity(0.08),in:Circle()).contentShape(Rectangle())}.keyboardShortcut(.escape,modifiers:[])
                 HStack(spacing:7){Button{viewer.zoom=max(1,viewer.zoom-0.25)}label:{Image(systemName:"minus")};Slider(value:$viewer.zoom,in:1...4).tint(.gray).frame(width:80);Button{viewer.zoom=min(4,viewer.zoom+0.25)}label:{Image(systemName:"plus")}}.padding(8).background(Color.primary.opacity(0.08),in:Capsule())
                 Spacer(minLength:8)
                 VStack(spacing:3){Text(model.title(item)).font(.headline).lineLimit(1);Text((model.captureDate(item)?.formatted(date:.long,time:.standard) ?? "촬영일 없음")+" · "+position(item)).font(.caption).foregroundStyle(.secondary)}
