@@ -4,6 +4,15 @@ import Darwin
 import Combine
 import ImageIO
 
+enum TransferNames {
+    static func name(_ raw:String)throws->String {
+        let value=raw.precomposedStringWithCanonicalMapping
+        guard !value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,value != ".",value != "..",value != ".CoolSyncTrash",!value.contains("/"),!value.contains("\\"),!value.unicodeScalars.contains(where:{$0.value<32}),value.utf8.count<=255 else{throw NSError(domain:"CoolSync",code:1,userInfo:[NSLocalizedDescriptionKey:"전송할 파일·폴더 이름이 올바르지 않거나 UTF-8 255바이트를 초과합니다"])}
+        return value
+    }
+    static func newRelativePath(_ path:String)throws->String {try path.split(separator:"/").map{try name(String($0))}.joined(separator:"/")}
+}
+
 struct FileMeta: Codable {
     let id: String
     let name: String
@@ -68,8 +77,9 @@ final class FileTransfer: ObservableObject {
         worker.async { [weak self] in
             do {
                 let info=try url.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey]); guard info.isRegularFile==true, let size=info.fileSize, size<=Self.limit else { throw self?.failure("일반 파일 8 GB 이하만 보낼 수 있습니다") ?? CocoaError(.fileReadUnknown) }
+                let name=try TransferNames.name(url.lastPathComponent)
                 let hash=try Self.hash(url,session:task)
-                var m=FileMeta(id:UUID().uuidString,name:url.lastPathComponent,size:Int64(size),sha:hash,flow:"download")
+                var m=FileMeta(id:UUID().uuidString,name:name,size:Int64(size),sha:hash,flow:"download")
                 m.path=folder;m.clipboard=clipboard ? true:nil;m.clipTime=clipTime
                 DispatchQueue.main.async { guard let self, !task.cancelled else { return }; self.busy=false; self.meta=m; self.source=url; self.summary="휴대폰에서 수신을 승인해 주세요"; self.sendControl?("fileOffer",self.json(m),m.id); self.arm() }
             } catch { DispatchQueue.main.async { guard let self, !task.cancelled else { return }; self.busy=false; self.meta=nil; self.summary=error.localizedDescription;if clipboard{try? FileManager.default.removeItem(at:url)}else{self.onCompletion?(false)};self.signalIdle() } }

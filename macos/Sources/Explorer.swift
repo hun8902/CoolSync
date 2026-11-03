@@ -88,6 +88,7 @@ final class ExplorerModel:ObservableObject {
     func call(_ op:String,_ fields:[String:Any]=[:],quiet:Bool=false,completion:@escaping([String:Any])->Void){
         guard connected?()==true else{if !quiet{fail("휴대폰이 연결되어 있지 않습니다")};completion(["ok":false,"error":"휴대폰이 연결되어 있지 않습니다"]);return}
         let id=UUID().uuidString;var q=fields;q["op"]=op
+        if ["mkdir","touch","rename"].contains(op),let name=q["name"]as?String{do{q["name"]=try TransferNames.name(name)}catch{completion(["ok":false,"error":error.localizedDescription]);return}}
         guard let data=try? JSONSerialization.data(withJSONObject:q),let text=String(data:data,encoding:.utf8)else{return}
         callbacks[id]=completion;if quiet{quietCalls.insert(id)}
         let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.quietCalls.remove(id);if !quiet{self.fail("기기 응답 시간이 지났습니다")};callback(["ok":false,"error":"응답 시간 초과"])}
@@ -147,23 +148,24 @@ final class ExplorerModel:ObservableObject {
     func chooseUpload(){let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=true;panel.allowsMultipleSelection=true;if panel.runModal() == .OK{upload(panel.urls,to:path)}}
     func upload(_ urls:[URL],to folder:String,completion:(()->Void)?=nil){
         guard !queueActive,files?.hasTransfer != true else{fail("진행 중인 파일 작업을 먼저 마치세요");return}
-        var planned:[ExplorerJob]=[]
+        var planned:[ExplorerJob]=[];var destinations=Set<String>()
+        func claim(_ parent:String,_ name:String)throws{let target=[parent,name].filter{!$0.isEmpty}.joined(separator:"/");guard destinations.insert(target).inserted else{throw NSError(domain:"CoolSync",code:1,userInfo:[NSLocalizedDescriptionKey:"한글 이름 정규화 후 같은 대상 이름이 중복됩니다: \(name)"])}}
         do{
             for url in urls{
                 let info=try url.resourceValues(forKeys:[.isDirectoryKey,.isSymbolicLinkKey]);if info.isSymbolicLink==true{throw CocoaError(.fileReadUnsupportedScheme)}
                 if info.isDirectory==true{
-                    planned.append(.mkdir(folder,url.lastPathComponent));let remote=[folder,url.lastPathComponent].filter{!$0.isEmpty}.joined(separator:"/")
+                    let name=try TransferNames.name(url.lastPathComponent);try claim(folder,name);planned.append(.mkdir(folder,name));let remote=[folder,name].filter{!$0.isEmpty}.joined(separator:"/")
                     guard let iterator=FileManager.default.enumerator(at:url,includingPropertiesForKeys:[.isDirectoryKey,.isSymbolicLinkKey])else{throw CocoaError(.fileReadUnknown)}
                     let children=iterator.compactMap{$0 as? URL}.sorted{$0.pathComponents.count<$1.pathComponents.count}
                     for child in children{
                         let attrs=try child.resourceValues(forKeys:[.isDirectoryKey,.isSymbolicLinkKey]);if attrs.isSymbolicLink==true{throw CocoaError(.fileReadUnsupportedScheme)}
-                        let relative=String(child.path.dropFirst(url.path.count+1));let parent=relative.split(separator:"/").dropLast().joined(separator:"/");let dest=[remote,parent].filter{!$0.isEmpty}.joined(separator:"/")
-                        if attrs.isDirectory==true{planned.append(.mkdir(dest,child.lastPathComponent))}else{planned.append(.upload(child,dest))}
+                        let relative=String(child.path.dropFirst(url.path.count+1));let parent=try TransferNames.newRelativePath(relative.split(separator:"/").dropLast().joined(separator:"/"));let dest=[remote,parent].filter{!$0.isEmpty}.joined(separator:"/")
+                        let name=try TransferNames.name(child.lastPathComponent);try claim(dest,name);if attrs.isDirectory==true{planned.append(.mkdir(dest,name))}else{planned.append(.upload(child,dest))}
                     }
-                }else{planned.append(.upload(url,folder))}
+                }else{let name=try TransferNames.name(url.lastPathComponent);try claim(folder,name);planned.append(.upload(url,folder))}
             }
             jobs=planned;uploadCompletion=completion;queueActive=true;nextJob()
-        }catch{fail("선택한 파일이나 폴더를 읽지 못했습니다")}
+        }catch{fail(error.localizedDescription)}
     }
     func download(move:Bool=false){
         let selected=entries.filter{selection.contains($0.path)};guard !selected.isEmpty else{return}

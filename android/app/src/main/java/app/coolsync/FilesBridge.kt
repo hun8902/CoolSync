@@ -61,7 +61,8 @@ object FilesBridge {
                 if(epoch!=generation){if(clipboardImage)java.io.File(source.path!!).delete();return@execute}
                 selected=source
                 var name="공유 파일"
-                if(source.scheme=="file") name=java.io.File(source.path!!).name else c.contentResolver.query(source,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { if(it.moveToFirst()) name=it.getString(0).take(180) }
+                if(source.scheme=="file") name=java.io.File(source.path!!).name else c.contentResolver.query(source,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { if(it.moveToFirst()) name=it.getString(0) }
+                name=TransferNames.name(name)
                 val digest=MessageDigest.getInstance("SHA-256"); var size=0L
                 c.contentResolver.openInputStream(source)!!.use { input ->
                     val buffer=ByteArray(65536)
@@ -149,11 +150,12 @@ object FilesBridge {
                     val done=Protocol.open(key,readFrame(input)); require(done.optString("type")=="fileDone" && done.optString("ref")==id)
                 } else {
                     c.contentResolver.openOutputStream(target ?: error("저장 위치가 없습니다"),"wt")!!.use { sink ->
-                        while(total<size) { if(epoch!=generation) error("전송 취소됨"); val clear=crypt(false,key,id,index++,readFrame(input)); require(clear.isNotEmpty() && clear.size<=65536); update(clear.size); hash.update(clear); sink.write(clear) }
+                        while(total<size) { if(epoch!=generation) error("전송 취소됨"); val clear=crypt(false,key,id,index++,readFrame(input)); require(clear.isNotEmpty() && clear.size<=65536 && total+clear.size<=size); update(clear.size); hash.update(clear); sink.write(clear) }
                     }
-                    require(hash.digest().joinToString("") { "%02x".format(it) }==meta.getString("sha")) { "파일 무결성 확인에 실패했습니다" }
+                    require(epoch==generation) { "전송 취소됨" }
+                    require(total==size && hash.digest().joinToString("") { "%02x".format(it) }==meta.getString("sha")) { "파일 크기 또는 무결성 확인에 실패했습니다" }
                     if(meta.optBoolean("clipboard")){require(ClipHistory.receive(c,java.io.File(target!!.path!!),meta.optLong("clipTime"))){"새 복사 내용이 있어 이전 이미지를 적용하지 않았습니다"}}
-                    if(managed!=null) { require(!managed.final.exists() && managed.temporary.renameTo(managed.final)) { "파일을 저장하지 못했습니다" };StorageBridge.rescan(c,listOf(managed.final.relativeTo(android.os.Environment.getExternalStorageDirectory()).invariantSeparatorsPath)) }
+                    if(managed!=null) { StorageBridge.commitUpload(c,managed);StorageBridge.rescan(c,listOf(managed.final.relativeTo(android.os.Environment.getExternalStorageDirectory()).invariantSeparatorsPath)) }
                     writeFrame(output,Protocol.seal(key,Protocol.message("fileDone",ref=id)).dropLast(1).toByteArray())
                 }
                 success=true

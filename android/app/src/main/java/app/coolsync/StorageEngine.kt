@@ -10,6 +10,14 @@ class StorageFault(val code: String, message: String): Exception(message)
 data class StorageEntry(val name:String,val path:String,val directory:Boolean,val size:Long,val modified:Long)
 data class TrashEntry(val id:String,val name:String,val original:String,val deleted:Long)
 
+object TransferNames {
+    fun name(raw:String):String {
+        val value=java.text.Normalizer.normalize(raw,java.text.Normalizer.Form.NFC)
+        if(value.isBlank() || value=="." || value==".." || value==".CoolSyncTrash" || value.any{it=='/'||it=='\\'||it.code<32} || value.toByteArray(Charsets.UTF_8).size>255) throw StorageFault("name","이름에 사용할 수 없는 문자가 있거나 UTF-8 255바이트를 초과합니다")
+        return value
+    }
+}
+
 /** All paths are relative to one explicitly granted shared-storage root. Never follows symlinks. */
 class StorageEngine(root:File, private val metadata:File) {
     private val base=root.canonicalFile
@@ -28,9 +36,12 @@ class StorageEngine(root:File, private val metadata:File) {
     }
     private fun relative(file:File)=file.relativeTo(base).invariantSeparatorsPath.let{if(it==".") "" else it}
     private fun mutable(path:String):File=resolve(path).also{if(it==base) fail("root","저장소 자체는 변경할 수 없습니다")}
-    private fun name(value:String):String {
-        if(value.isBlank() || value=="." || value==".." || value==".CoolSyncTrash" || value.any{it=='/'||it=='\\'||it.code<32} || value.toByteArray().size>255) fail("name","이름에 사용할 수 없는 문자가 있거나 너무 깁니다")
-        return value
+    private fun name(value:String)=TransferNames.name(value)
+    fun newTarget(parent:String,value:String):File {
+        val folder=resolve(parent);if(!folder.isDirectory)fail("directory","대상 폴더를 찾지 못했습니다")
+        val normalized=name(value)
+        if(folder.list()?.any{java.text.Normalizer.normalize(it,java.text.Normalizer.Form.NFC)==normalized}==true)fail("exists","같은 이름 또는 한글 정규화 기준으로 동일한 항목이 있습니다")
+        return resolve(listOf(parent,normalized).filter{it.isNotEmpty()}.joinToString("/"),false)
     }
     fun list(path:String):List<StorageEntry> {
         val directory=resolve(path);if(!directory.isDirectory) fail("directory","폴더가 아닙니다")
@@ -41,14 +52,14 @@ class StorageEngine(root:File, private val metadata:File) {
     }
     fun create(parent:String,value:String,directory:Boolean):String {
         val folder=resolve(parent);if(!folder.isDirectory) fail("directory","대상 폴더를 찾지 못했습니다")
-        val target=resolve(listOf(parent,name(value)).filter{it.isNotEmpty()}.joinToString("/"),false)
+        val target=newTarget(parent,value)
         if(target.exists()) fail("exists","같은 이름의 파일이나 폴더가 있습니다")
         val ok=if(directory)target.mkdir() else target.createNewFile()
         if(!ok) fail("write","파일이나 폴더를 만들지 못했습니다")
         return relative(target)
     }
     fun rename(path:String,value:String):String {
-        val source=mutable(path); val target=File(source.parentFile,name(value));resolve(relative(target),false)
+        val source=mutable(path); val target=newTarget(relative(source.parentFile),value)
         if(target.exists()) fail("exists","같은 이름의 파일이나 폴더가 있습니다")
         if(!source.renameTo(target)) fail("write","이름을 변경하지 못했습니다")
         return relative(target)

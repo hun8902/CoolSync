@@ -103,11 +103,15 @@ object StorageBridge {
     }
     private fun paths(q:JSONObject):List<String> {val array=q.getJSONArray("paths");return (0 until array.length()).map{array.getString(it)}}
     data class Upload(val temporary:File,val final:File)
+    fun commitUpload(c:Context,upload:Upload) {
+        val root=Environment.getExternalStorageDirectory()
+        val parent=upload.final.parentFile!!.relativeTo(root).invariantSeparatorsPath.let{if(it==".")""else it}
+        val target=engine(c).newTarget(parent,upload.final.name)
+        java.nio.file.Files.move(upload.temporary.toPath(),target.toPath())
+    }
     fun prepareUpload(c:Context,parent:String,name:String):Upload {
         val fs=engine(c);val folder=fs.resolve(parent);if(!folder.isDirectory)throw StorageFault("directory","저장할 폴더가 아닙니다")
-        if(name.isBlank()||name.any{it=='/'||it=='\\'||it.code<32}||name=="."||name==".."||name==".CoolSyncTrash")throw StorageFault("name","올바르지 않은 파일 이름입니다")
-        val final=fs.resolve(listOf(parent,name).filter{it.isNotEmpty()}.joinToString("/"),false)
-        if(final.exists())throw StorageFault("exists","같은 이름의 파일이 있습니다. 이름을 바꾸거나 기존 파일을 옮긴 뒤 다시 시도하세요.")
+        val final=fs.newTarget(parent,name)
         val temporary=File(folder,".coolsync-${java.util.UUID.randomUUID()}.partial");if(!temporary.createNewFile())throw StorageFault("write","파일을 만들지 못했습니다")
         return Upload(temporary,final)
     }
