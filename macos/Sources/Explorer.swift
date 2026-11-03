@@ -88,7 +88,7 @@ final class ExplorerModel:ObservableObject {
     func call(_ op:String,_ fields:[String:Any]=[:],quiet:Bool=false,completion:@escaping([String:Any])->Void){
         guard connected?()==true else{if !quiet{fail("휴대폰이 연결되어 있지 않습니다")};completion(["ok":false,"error":"휴대폰이 연결되어 있지 않습니다"]);return}
         let id=UUID().uuidString;var q=fields;q["op"]=op
-        if ["mkdir","touch","rename"].contains(op),let name=q["name"]as?String{do{q["name"]=try TransferNames.name(name)}catch{completion(["ok":false,"error":error.localizedDescription]);return}}
+        if ["mkdir","touch","rename"].contains(op),let name=q["name"]as?String{do{q["name"]=try TransferNames.name(name)}catch{if !quiet{fail(error.localizedDescription)};completion(["ok":false,"error":error.localizedDescription]);return}}
         guard let data=try? JSONSerialization.data(withJSONObject:q),let text=String(data:data,encoding:.utf8)else{return}
         callbacks[id]=completion;if quiet{quietCalls.insert(id)}
         let timer=DispatchWorkItem{[weak self]in guard let self,let callback=self.callbacks.removeValue(forKey:id)else{return};self.timers.removeValue(forKey:id);self.quietCalls.remove(id);if !quiet{self.fail("기기 응답 시간이 지났습니다")};callback(["ok":false,"error":"응답 시간 초과"])}

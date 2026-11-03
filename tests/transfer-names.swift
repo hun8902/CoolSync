@@ -23,4 +23,5 @@ precondition(offers==1 && created==["기존/가나다무","기존/가나다무/�
 precondition(try! Data(contentsOf:source)==bytes);explorer.cancelJobs()
 let collision=ExplorerModel();var sent=0;collision.connected={true};collision.send={_,_,_ in sent+=1};collision.upload([source,source],to:"")
 precondition(sent==0 && collision.error?.contains("중복") == true)
+let invalid=ExplorerModel();invalid.connected={true};var rejected=false;invalid.call("mkdir",["path":"","name":String(repeating:"가",count:86)]){response in rejected=response["ok"]as?Bool==false};precondition(rejected && invalid.error != nil)
 print("PASS: NFC wire names and nested destinations; original URLs and bytes preserved; compatibility jamo/emoji preserved; long extension preserved; UTF-8 boundary; duplicate plan rejected before first request")
