@@ -34,7 +34,7 @@ object GalleryMedia {
                 val index=cur.getColumnIndex("xmp");val xmp=if(index>=0)runCatching{cur.getBlob(index)?.toString(Charsets.UTF_8) ?: ""}.getOrDefault("")else ""
                 val live=Regex("""(?:MotionPhoto|MicroVideo)\s*=\s*["']1["']""").containsMatchIn(xmp) || xmp.contains(":MotionPhoto>1<") || (!mime.startsWith("video/") && listOf("mov","MOV").any{File(file.parentFile,file.nameWithoutExtension+"."+it).isFile})
                 val album=path.substringBeforeLast('/',"")
-                val row=JSONObject().put("id",cur.getLong(0).toString()).put("name",cur.getString(2) ?: file.name).put("path",path).put("size",cur.getLong(4)).put("mime",mime).put("taken",MediaDates.display(cur.getLong(5),cur.getLong(11))).put("width",cur.getInt(6)).put("height",cur.getInt(7)).put("duration",cur.getLong(8)).put("added",cur.getLong(9)*1000).put("favorite",cur.getInt(10)==1).put("album",album.substringAfterLast('/').ifEmpty{"기타"}).put("bucket",album).put("live",live)
+                val row=JSONObject().put("id",cur.getLong(0).toString()).put("name",cur.getString(2) ?: file.name).put("path",path).put("size",cur.getLong(4)).put("mime",mime).put("taken",MediaDates.display(cur.getLong(5),cur.getLong(11))).put("modified",cur.getLong(11)*1000).put("width",cur.getInt(6)).put("height",cur.getInt(7)).put("duration",cur.getLong(8)).put("added",cur.getLong(9)*1000).put("favorite",cur.getInt(10)==1).put("album",album.substringAfterLast('/').ifEmpty{"기타"}).put("bucket",album).put("live",live)
                 if(rows.length()>0 && rows.toString().toByteArray().size+row.toString().toByteArray().size>maxBytes)break
                 rows.put(row);next++;if(rows.length()>=limit)break
             }while(cur.moveToNext())

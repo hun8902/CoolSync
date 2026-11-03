@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 import MapKit
 
 extension GalleryModel {
-    func useLibrary(identity:String){let key=SHA256.hash(data:Data(identity.utf8)).map{String(format:"%02x",$0)}.joined();guard libraryIdentity != key else{return};libraryIdentity=key;if UserDefaults.standard.string(forKey:"galleryFavoriteOwner")==nil{UserDefaults.standard.set(key,forKey:"galleryFavoriteOwner")};if UserDefaults.standard.string(forKey:"galleryFavoriteOwner") != key{favorites=[]};librarySession=UUID();analysisStop=true;analysisRunning=false;store=PhotoLibraryStore(folder:FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/PhotoLibrary/"+key));libraryDoc=store.load();sync=PhotoSyncState();syncEvents=[];readCatalogCache();undoDocuments=[];redoDocuments=[];unlocked=false}
+    func useLibrary(identity:String){let key=SHA256.hash(data:Data(identity.utf8)).map{String(format:"%02x",$0)}.joined();guard libraryIdentity != key else{return};disconnect();libraryIdentity=key;if UserDefaults.standard.string(forKey:"galleryFavoriteOwner")==nil{UserDefaults.standard.set(key,forKey:"galleryFavoriteOwner")};if UserDefaults.standard.string(forKey:"galleryFavoriteOwner") != key{favorites=[]};librarySession=UUID();analysisStop=true;analysisRunning=false;store=PhotoLibraryStore(folder:FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/PhotoLibrary/"+key));libraryDoc=store.load();sync=PhotoSyncState();syncEvents=[];readCatalogCache();undoDocuments=[];redoDocuments=[];unlocked=false}
 
     func note(_ item:GalleryItem)->PhotoAnnotation{libraryDoc.annotations[item.path] ?? PhotoAnnotation()}
     func title(_ item:GalleryItem)->String{let value=note(item).title;return value.isEmpty ? item.name:value}
@@ -112,11 +112,17 @@ extension GalleryModel {
     }
     func fetch(_ item:GalleryItem,valid:(()->Bool)?=nil,completion:@escaping(Result<URL,Error>)->Void){
         guard valid?() != false else{completion(.failure(CocoaError(.userCancelled)));return}
-        if let existing=downloaded[item.path],FileManager.default.fileExists(atPath:existing.path){completion(.success(existing));return}
-        if selected?.id==item.id,let original{completion(.success(original));return}
-        let url=cache.appendingPathComponent(UUID().uuidString+"."+(item.name as NSString).pathExtension)
+        let url=originalCacheURL(item)
+        if validOriginalCache(url,item){downloaded[item.path]=url;completion(.success(url));return}
+        let temporary=cache.appendingPathComponent(UUID().uuidString+".partial")
         let token=librarySession
-        explorer.promise(item.remote,to:url,quiet:true,valid:valid){[weak self]error in guard let self,self.librarySession==token else{completion(.failure(CocoaError(.userCancelled)));return};if let error{completion(.failure(error))}else{self.downloaded[item.path]=url;completion(.success(url))}}
+        explorer.promise(item.remote,to:temporary,quiet:true,valid:valid){[weak self]error in
+            guard let self,self.librarySession==token,valid?() != false else{try?FileManager.default.removeItem(at:temporary);completion(.failure(CocoaError(.userCancelled)));return}
+            do{if let error{throw error};guard self.validOriginalCache(temporary,item)else{throw CocoaError(.fileReadCorruptFile)}
+                if self.validOriginalCache(url,item){try?FileManager.default.removeItem(at:temporary)}else{try?FileManager.default.removeItem(at:url);try FileManager.default.moveItem(at:temporary,to:url)}
+                self.downloaded[item.path]=url;completion(.success(url))
+            }catch{try?FileManager.default.removeItem(at:temporary);completion(.failure(error))}
+        }
     }
     func exportTargets(originals:Bool=false){
         let values=targets;guard !values.isEmpty else{return};let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;panel.prompt="내보내기"

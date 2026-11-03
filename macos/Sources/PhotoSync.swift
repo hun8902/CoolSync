@@ -20,14 +20,14 @@ extension GalleryModel {
     func event(_ text:String){syncEvents.append(PhotoSyncEvent(text:text));if syncEvents.count>80{syncEvents.removeFirst(syncEvents.count-80)}}
     var syncDiagnostics:String{let formatter=ISO8601DateFormatter();var values=["CoolSync photo diagnostics","Mac build: "+(Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion")as?String ?? "test"),"Phase: "+sync.phase.rawValue,"Catalog: \(sync.received)/\(sync.total.map(String.init) ?? "unknown") · page \(sync.pages)","Previews: \(sync.previewFinished)/\(sync.previewRequested), failed \(sync.previewFailed)","Error code: "+sync.issueCode];if let device=sync.device{values.append("Android build: \(device.build), screen on: \(device.interactive), locked: \(device.locked), first unlock: \(device.userUnlocked), file access: \(device.storage), battery exempt: \(device.batteryExempt)")};values+=syncEvents.map{formatter.string(from:$0.date)+" "+$0.text};return values.joined(separator:"\n")}
     func copySyncDiagnostics(){NSPasteboard.general.clearContents();NSPasteboard.general.setString(syncDiagnostics,forType:.string)}
-    func ensureLoaded(){if !loading && (items.isEmpty || sync.cached || sync.phase == .idle || sync.phase == .disconnected){reload()}}
+    func ensureLoaded(){if !loading && (sync.cached || sync.phase == .idle || sync.phase == .disconnected){reload()}}
     func readGallery(_ op:String,_ fields:[String:Any],completion:@escaping([String:Any])->Void){if let readOverride{readOverride(op,fields,completion);return};transport.call(op,fields,completion:completion)}
     func beginPhotoLoad(resume:Bool=false){
         if loading{return}
         guard explorer.connected?()==true else{sync.phase = .disconnected;sync.message="휴대폰 연결을 기다리고 있습니다";sync.issue="CoolSync의 연결 화면에서 휴대폰 연결 상태를 확인하세요";sync.issueCode="disconnected";status=sync.message;event("disconnected before catalog request");return}
         generation=UUID();queue=[];waiting=[];fetching=false;previewRequested=[];previewFinished=[];thumbnailErrors=[:];sync.previewRequested=0;sync.previewFinished=0;sync.previewFailed=0
         loading=true;sync.started=Date();sync.issue=nil;sync.issueCode="";sync.phase = .connecting;sync.message="휴대폰 사진 연결 준비 중…";status=sync.message
-        if !resume{sync.nextOffset=0;sync.received=0;sync.pages=0;sync.total=nil;catalogPending=[];transport.invalidate()}else{catalogPending=items}
+        if !resume{catalogVersions=Dictionary(items.map{($0.id,$0.cacheVersion)},uniquingKeysWith:{_,last in last});sync.nextOffset=0;sync.received=0;sync.pages=0;sync.total=nil;catalogPending=[];transport.invalidate()}else{catalogPending=items}
         event(resume ? "resume catalog at \(sync.nextOffset)":"start catalog refresh")
         page(resume ? sync.nextOffset:0,generation)
     }
@@ -45,6 +45,7 @@ extension GalleryModel {
                 let data=try JSONSerialization.data(withJSONObject:rows);let values=try JSONDecoder().decode([GalleryItem].self,from:data)
                 let next=(response["next"]as?NSNumber)?.intValue ?? offset+values.count,total=(response["total"]as?NSNumber)?.intValue ?? next
                 guard next>=offset,total>=0,next<=total,next>offset || next>=total else{throw GalleryNetworkError.unavailable("사진 목록의 다음 페이지 정보가 올바르지 않습니다")}
+                for item in values{if let old=self.catalogVersions[item.id],old != item.cacheVersion{self.thumbnails.removeValue(forKey:item.id);self.downloaded.removeValue(forKey:item.path)}}
                 let known=Set(self.catalogPending.map{$0.id});self.catalogPending+=values.filter{!known.contains($0.id)};self.items=self.catalogPending
                 self.sync.received=self.items.count;self.sync.total=total;self.sync.nextOffset=next;self.sync.pages+=1;self.sync.updated=Date();self.sync.cached=false
                 self.event("catalog page \(self.sync.pages): \(values.count) rows, cursor \(next)/\(total)")
@@ -54,7 +55,7 @@ extension GalleryModel {
     }
     func saveCatalogCache(){let value=PhotoCatalogCache(updated:Date(),items:items);if let data=try?JSONEncoder().encode(value){try?data.write(to:store.folder.appendingPathComponent("catalog.json"),options:.atomic)}}
     func readCatalogCache(){let url=store.folder.appendingPathComponent("catalog.json");guard let data=try?Data(contentsOf:url),let value=try?JSONDecoder().decode(PhotoCatalogCache.self,from:data)else{return};items=value.items;sync.cached=true;sync.received=items.count;sync.total=items.count;sync.updated=value.updated;sync.phase = .cached;sync.message="저장된 목록 \(items.count)개 · 연결 후 최신 목록을 확인합니다";status=sync.message}
-    func thumbnailURL(_ item:GalleryItem)->URL{let key=SHA256.hash(data:Data((item.id+"|"+item.path+"|\(item.size)|\(item.taken)").utf8)).map{String(format:"%02x",$0)}.joined();let directory=store.folder.appendingPathComponent("Previews");try?FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);return directory.appendingPathComponent(key+".jpg")}
+    func thumbnailURL(_ item:GalleryItem)->URL{let key=SHA256.hash(data:Data((item.cacheVersion).utf8)).map{String(format:"%02x",$0)}.joined();let directory=store.folder.appendingPathComponent("Previews");try?FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true);return directory.appendingPathComponent(key+".jpg")}
     func retryThumbnail(_ item:GalleryItem){thumbnailErrors.removeValue(forKey:item.id);waiting.remove(item.id);thumb(item)}
     func retryFailedPreviews(){let ids=Set(thumbnailErrors.keys);for item in visible where ids.contains(item.id){retryThumbnail(item)}}
     func thumbnailProgress(){sync.previewRequested=previewRequested.count;sync.previewFinished=previewFinished.count;sync.previewFailed=thumbnailErrors.count;if !loading && sync.phase != .failed && sync.phase != .canceled && sync.phase != .disconnected{sync.phase=fetching || !queue.isEmpty ? .previews:.ready};if sync.phase == .previews{sync.message="미리보기 받는 중 · \(sync.previewFinished)/\(sync.previewRequested)개"}else if sync.phase == .ready{sync.message=sync.previewFailed>0 ? "사진 목록 수신 완료 · 미리보기 \(sync.previewFailed)개 실패":"사진 목록·미리보기 수신 완료 · \(items.count)개"}}

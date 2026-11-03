@@ -107,7 +107,7 @@ struct CoolDashboard:View {
         },set:{ value in
             guard let value else { return }
             switch value {
-            case "gallery":model.tab=4;model.gallery.reload()
+            case "gallery":model.tab=4;model.gallery.ensureLoaded()
             case "connection":model.tab=0
             case "clipboard":model.tab=3
             case "settings":model.tab=2

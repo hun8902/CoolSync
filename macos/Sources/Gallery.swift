@@ -8,7 +8,8 @@ import PhotosUI
 import MapKit
 
 struct GalleryItem:Identifiable,Codable {
-    let id:String;let name:String;let path:String;let size:Int64;let mime:String;let taken:Int64;let duration:Int64;let width:Int;let height:Int;let album:String;let favorite:Bool;var added:Int64?=nil;var bucket:String?=nil;var live:Bool?=nil
+    let id:String;let name:String;let path:String;let size:Int64;let mime:String;let taken:Int64;let duration:Int64;let width:Int;let height:Int;let album:String;let favorite:Bool;var added:Int64?=nil;var bucket:String?=nil;var live:Bool?=nil;var modified:Int64?=nil
+    var cacheVersion:String{"\(id)|\(path)|\(size)|\(taken)|\(modified ?? 0)|\(mime)"}
     var video:Bool{mime.hasPrefix("video/")}
     var date:Date?{taken>0 ? Date(timeIntervalSince1970:Double(taken)/1000):nil}
     var remote:RemoteEntry{RemoteEntry(name:name,path:path,directory:false,size:size,modified:0)}
@@ -75,12 +76,14 @@ final class GalleryModel:ObservableObject {
     @Published var grouping="모든 사진"
     @Published var tile:Double=160
     @Published var favorites=Set(UserDefaults.standard.stringArray(forKey:"galleryFavorites") ?? [])
+    var catalogVersions:[String:String]=[:]
     var generation=UUID()
     var waiting=Set<String>()
     var queue:[GalleryItem]=[]
     var fetching=false
-    let cache=FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/Gallery",isDirectory:true)
-    init(explorer:ExplorerModel,store:PhotoLibraryStore=PhotoLibraryStore()){
+    let cache:URL
+    init(explorer:ExplorerModel,store:PhotoLibraryStore=PhotoLibraryStore(),cacheFolder:URL?=nil){
+        cache=cacheFolder ?? FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent("CoolSync/Gallery",isDirectory:true)
         self.explorer=explorer;self.store=store;libraryDoc=store.load();try?FileManager.default.createDirectory(at:cache,withIntermediateDirectories:true)
         transport.bootstrap={ [weak explorer]completion in explorer?.call("mediaSession",quiet:true,completion:completion) }
         transport.legacyCatalog={ [weak explorer]fields,completion in
