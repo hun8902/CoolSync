@@ -55,8 +55,8 @@ struct GalleryPane:View {
             if viewer.showSidebar && model.selected==nil && !model.slideshow{sidebar;Divider()}
             VStack(spacing:0){toolbar;Divider();if model.selected==nil && (model.sync.busy || model.sync.phase == .failed || model.sync.phase == .disconnected || model.sync.phase == .canceled || model.sync.cached || model.sync.previewFailed>0){PhotoLoadingPanel(model:model)};content;footer}
         }.background(Color(nsColor:.windowBackgroundColor))
-        .onAppear{model.ensureLoaded()}
-        .onDisappear{viewer.player?.pause();viewer.music?.stop();model.slideshow=false}
+        .onAppear{model.galleryVisible=true;model.ensureLoaded()}
+        .onDisappear{model.galleryVisible=false;viewer.player?.pause();viewer.music?.stop();model.slideshow=false}
         .onReceive(NotificationCenter.default.publisher(for:.NSCalendarDayChanged)){_ in model.objectWillChange.send()}
         .onChange(of:model.original){_ in configurePlayer()}
         .onChange(of:model.currentURL){_ in if !model.editing{configurePlayer()}}

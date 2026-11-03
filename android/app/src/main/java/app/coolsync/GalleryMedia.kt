@@ -26,7 +26,7 @@ object GalleryMedia {
         cursor.use{cur->
             total=cur.count;next=offset.coerceAtMost(total)
             if(cur.moveToPosition(next))do{
-                val file=File(cur.getString(1) ?: "");if(!file.path.startsWith(root.path+"/")){next++;continue}
+                val file=File(cur.getString(1) ?: "");if(!file.path.startsWith(root.path+"/") || !file.isFile){next++;continue}
                 val path=file.relativeTo(root).invariantSeparatorsPath
                 if(path.split('/').any{it.startsWith('.')}){next++;continue}
                 val mime=cur.getString(3) ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: ""

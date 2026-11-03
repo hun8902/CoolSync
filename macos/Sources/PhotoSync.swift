@@ -20,21 +20,22 @@ extension GalleryModel {
     func event(_ text:String){syncEvents.append(PhotoSyncEvent(text:text));if syncEvents.count>80{syncEvents.removeFirst(syncEvents.count-80)}}
     var syncDiagnostics:String{let formatter=ISO8601DateFormatter();var values=["CoolSync photo diagnostics","Mac build: "+(Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion")as?String ?? "test"),"Phase: "+sync.phase.rawValue,"Catalog: \(sync.received)/\(sync.total.map(String.init) ?? "unknown") · page \(sync.pages)","Previews: \(sync.previewFinished)/\(sync.previewRequested), failed \(sync.previewFailed)","Error code: "+sync.issueCode];if let device=sync.device{values.append("Android build: \(device.build), screen on: \(device.interactive), locked: \(device.locked), first unlock: \(device.userUnlocked), file access: \(device.storage), battery exempt: \(device.batteryExempt)")};values+=syncEvents.map{formatter.string(from:$0.date)+" "+$0.text};return values.joined(separator:"\n")}
     func copySyncDiagnostics(){NSPasteboard.general.clearContents();NSPasteboard.general.setString(syncDiagnostics,forType:.string)}
-    func ensureLoaded(){if !loading && (sync.cached || sync.phase == .idle || sync.phase == .disconnected){reload()}}
+    func ensureLoaded(){if !loading && (galleryDirty || sync.cached || sync.phase == .idle || sync.phase == .disconnected){reload()}}
     func readGallery(_ op:String,_ fields:[String:Any],completion:@escaping([String:Any])->Void){if let readOverride{readOverride(op,fields,completion);return};transport.call(op,fields,completion:completion)}
     func beginPhotoLoad(resume:Bool=false){
         if loading{return}
         guard explorer.connected?()==true else{sync.phase = .disconnected;sync.message="휴대폰 연결을 기다리고 있습니다";sync.issue="CoolSync의 연결 화면에서 휴대폰 연결 상태를 확인하세요";sync.issueCode="disconnected";status=sync.message;event("disconnected before catalog request");return}
+        galleryDirty=false;preserveCatalogDuringLoad = !items.isEmpty
         generation=UUID();queue=[];waiting=[];fetching=false;previewRequested=[];previewFinished=[];thumbnailErrors=[:];sync.previewRequested=0;sync.previewFinished=0;sync.previewFailed=0
         loading=true;sync.started=Date();sync.issue=nil;sync.issueCode="";sync.phase = .connecting;sync.message="휴대폰 사진 연결 준비 중…";status=sync.message
         if !resume{catalogVersions=Dictionary(items.map{($0.id,$0.cacheVersion)},uniquingKeysWith:{_,last in last});sync.nextOffset=0;sync.received=0;sync.pages=0;sync.total=nil;catalogPending=[];transport.invalidate()}else{catalogPending=items}
         event(resume ? "resume catalog at \(sync.nextOffset)":"start catalog refresh")
         page(resume ? sync.nextOffset:0,generation)
     }
-    func cancelPhotoLoad(){generation=UUID();transport.invalidate();loading=false;queue=[];waiting=[];fetching=false;sync.phase = .canceled;sync.message="사진 불러오기를 중단했습니다 · 받은 \(items.count)개는 표시합니다";status=sync.message;event("catalog canceled by user")}
+    func cancelPhotoLoad(){galleryDirty=false;generation=UUID();transport.invalidate();loading=false;queue=[];waiting=[];fetching=false;sync.phase = .canceled;sync.message="사진 불러오기를 중단했습니다 · 받은 \(items.count)개는 표시합니다";status=sync.message;event("catalog canceled by user")}
     func resumePhotoLoad(){beginPhotoLoad(resume:sync.nextOffset>0)}
     func retryPhotoLoad(){if loading{cancelPhotoLoad()};beginPhotoLoad()}
-    func failPhotoLoad(_ code:String,_ text:String){loading=false;sync.phase = .failed;sync.issueCode=code;sync.issue=text;sync.message="사진 불러오기 실패 · \(sync.received)개 수신";status=text;event("catalog failed: "+code)}
+    func failPhotoLoad(_ code:String,_ text:String){loading=false;sync.phase = .failed;sync.issueCode=code;sync.issue=text;sync.message="사진 불러오기 실패 · \(sync.received)개 수신";status=text;event("catalog failed: "+code);_ = refreshAfterGalleryChange()}
     func page(_ offset:Int,_ token:UUID){
         sync.phase = .catalog;sync.message=sync.total.map{"사진 목록 받는 중 · \(sync.received)/\($0)개"} ?? "휴대폰 사진 목록을 요청했습니다 · 응답 대기 중";status=sync.message
         readGallery("gallery",["offset":offset,"limit":offset==0 ? 1:200]){[weak self]response in
@@ -46,10 +47,10 @@ extension GalleryModel {
                 let next=(response["next"]as?NSNumber)?.intValue ?? offset+values.count,total=(response["total"]as?NSNumber)?.intValue ?? next
                 guard next>=offset,total>=0,next<=total,next>offset || next>=total else{throw GalleryNetworkError.unavailable("사진 목록의 다음 페이지 정보가 올바르지 않습니다")}
                 for item in values{if let old=self.catalogVersions[item.id],old != item.cacheVersion{self.thumbnails.removeValue(forKey:item.id);self.downloaded.removeValue(forKey:item.path)}}
-                let known=Set(self.catalogPending.map{$0.id});self.catalogPending+=values.filter{!known.contains($0.id)};self.items=self.catalogPending
-                self.sync.received=self.items.count;self.sync.total=total;self.sync.nextOffset=next;self.sync.pages+=1;self.sync.updated=Date();self.sync.cached=false
+                let known=Set(self.catalogPending.map{$0.id});self.catalogPending+=values.filter{!known.contains($0.id)};if !self.preserveCatalogDuringLoad || next>=total{self.items=self.catalogPending.filter{!self.pendingTrashPaths.contains($0.path)}}
+                self.sync.received=self.catalogPending.count;self.sync.total=total;self.sync.nextOffset=next;self.sync.pages+=1;self.sync.updated=Date();self.sync.cached=false
                 self.event("catalog page \(self.sync.pages): \(values.count) rows, cursor \(next)/\(total)")
-                if next<total{self.page(next,token)}else{self.loading=false;self.sync.phase = self.queue.isEmpty && !self.fetching ? .ready:.previews;self.sync.message=self.items.isEmpty ? "휴대폰 사진 목록을 정상적으로 확인했습니다 · 사진 0개":"사진 목록 수신 완료 · \(self.items.count)개";self.status=self.sync.message;self.saveCatalogCache();self.event("catalog complete: \(self.items.count) items");for item in self.visible.prefix(80) where self.thumbnails[item.id]==nil && self.thumbnailErrors[item.id]==nil{self.thumb(item)}}
+                if next<total{self.page(next,token)}else{self.reconcileGallerySelection();self.loading=false;self.sync.phase = self.queue.isEmpty && !self.fetching ? .ready:.previews;self.sync.message=self.items.isEmpty ? "휴대폰 사진 목록을 정상적으로 확인했습니다 · 사진 0개":"사진 목록 수신 완료 · \(self.items.count)개";self.status=self.sync.message;self.saveCatalogCache();self.event("catalog complete: \(self.items.count) items");if self.refreshAfterGalleryChange(){return};for item in self.visible.prefix(80) where self.thumbnails[item.id]==nil && self.thumbnailErrors[item.id]==nil{self.thumb(item)}}
             }catch{self.failPhotoLoad("decode",error.localizedDescription)}
         }
     }

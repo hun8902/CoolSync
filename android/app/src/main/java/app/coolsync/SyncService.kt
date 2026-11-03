@@ -16,6 +16,7 @@ class SyncService : Service() {
     companion object { var active: SyncService? = null; private set
         const val STATE = "app.coolsync.STATE" }
     private val main = Handler(Looper.getMainLooper())
+    private val galleryChanges by lazy{GalleryChangeObserver(this,{authenticated}){sendControl("galleryChanged",JSONObject().put("reason","mediaStore").toString(),"")}}
     private val prefs by lazy { getSharedPreferences("sync",0) }
     private var receiverRegistered = false
     private var server: BluetoothGattServer? = null
@@ -177,11 +178,11 @@ class SyncService : Service() {
             peerName = try { JSONObject(m.optString("text")).optString("name","Mac").take(80) } catch (_: Exception) { "Mac" }
             val info = JSONObject().put("mtu",(mtu-3).coerceIn(20,180)).put("name", runCatching { android.provider.Settings.Global.getString(contentResolver,"device_name") }.getOrNull() ?: Build.MODEL).put("model",Build.MODEL).put("android",Build.VERSION.RELEASE).put("confirm",confirm)
             val ack=Protocol.message("helloAck",text=info.toString(),ref=id);handshakeAck=ack.getString("id");send(ack)
-            if(!confirm){authenticated=true;connecting=false;main.removeCallbacks(linkTimeout);advertiser?.stopAdvertising(advert);update("Mac 연결됨 · 복사 대기")}
+            if(!confirm){authenticated=true;galleryChanges.start();connecting=false;main.removeCallbacks(linkTimeout);advertiser?.stopAdvertising(advert);update("Mac 연결됨 · 복사 대기")}
             return
         }
         if(type=="ready" && handshakeAck.isNotEmpty() && m.optString("ref")==handshakeAck){
-            authenticated=true;connecting=false;main.removeCallbacks(linkTimeout);main.removeCallbacks(waitTimeout);advertiser?.stopAdvertising(advert)
+            authenticated=true;galleryChanges.start();connecting=false;main.removeCallbacks(linkTimeout);main.removeCallbacks(waitTimeout);advertiser?.stopAdvertising(advert)
             send(Protocol.message("readyAck",ref=id));update("Mac 연결됨 · 복사 대기");return
         }
         if(!authenticated) return
@@ -249,6 +250,7 @@ class SyncService : Service() {
         else main.postDelayed(sendTimeout,8000)
     }
     private fun resetPeer() {
+        galleryChanges.stop()
         GalleryServer.close();outboundPower?.close();outboundPower=null
         peer = null; authenticated = false;connecting=false; subscribed = false; pendingHello=null;handshakeAck=""; mtu = 23; pending = null
         input.reset(); chunks.clear(); sending = false; inFlightID = null

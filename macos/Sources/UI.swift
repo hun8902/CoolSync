@@ -36,7 +36,7 @@ final class DashboardModel: ObservableObject {
                 if value.authenticated { self.pairing=false; if !wasConnected { self.gallery.useLibrary(identity:value.key.base64EncodedString()); if self.tab==1{self.explorer.reload()}; if self.tab==4{self.gallery.reload()} } }
             }
             value.fileMessage={ [weak self] message in self?.files.handle(message) }
-            value.filesystemMessage={ [weak self] message in if message.type=="galleryChanged"{self?.gallery.reload();if self?.gallery.category=="최근 삭제된 항목"{self?.gallery.loadDeleted()}}else{self?.explorer.handle(message)} }
+            value.filesystemMessage={ [weak self] message in if message.type=="galleryChanged"{self?.gallery.galleryDidChange()}else{self?.explorer.handle(message)} }
             files.onIdle={ [weak self] in self?.explorer.resumePromises() };explorer.files=files; explorer.connected={ [weak value] in value?.authenticated ?? false }; explorer.send={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.sendControl={ [weak value] type,text,ref in value?.sendControl(type,text,ref) }
             files.key={ [weak value] in value?.key ?? Data() }; files.connected={ [weak value] in value?.authenticated ?? false }

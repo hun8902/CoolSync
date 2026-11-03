@@ -76,6 +76,12 @@ final class GalleryModel:ObservableObject {
     @Published var grouping="모든 사진"
     @Published var tile:Double=160
     @Published var favorites=Set(UserDefaults.standard.stringArray(forKey:"galleryFavorites") ?? [])
+    var deletedGeneration=UUID()
+    var galleryVisible=false
+    var galleryDirty=false
+    var preserveCatalogDuringLoad=false
+    var pendingTrashPaths=Set<String>()
+    var photoTrashRunning=false
     var catalogVersions:[String:String]=[:]
     var generation=UUID()
     var waiting=Set<String>()
@@ -165,6 +171,6 @@ final class GalleryModel:ObservableObject {
         DispatchQueue.main.async{if self.librarySession==token,self.selected?.id==id{self.motion=found;if found != nil,let path=self.selected?.path{self.motionPaths.insert(path);var a=self.libraryDoc.annotations[path] ?? PhotoAnnotation();if !a.labels.contains("live"){a.labels.append("live")};self.libraryDoc.annotations[path]=a;self.persist()}}}
     }}
     func step(_ delta:Int){let list=slideshow ? slideshowItems:visible;guard let id=selected?.id,let index=list.firstIndex(where:{$0.id==id}),list.indices.contains(index+delta)else{return};open(list[index+delta])}
-    func disconnect(){transport.invalidate();sync.phase = .disconnected;sync.message="휴대폰 연결이 끊겼습니다 · 재연결을 기다립니다";sync.issueCode="disconnected";fetching=false;activeExport?.cancelExport();activeExport=nil;saving=false;previewWork?.cancel();librarySession=UUID();analysisStop=true;analysisRunning=false;unlocked=false;slideshow=false;editing=false;selection=[];downloaded=[:];generation=UUID();loading=false;selected=nil;original=nil;motion=nil;livePhoto=nil;items=[];queue=[];waiting=[];thumbnails=[:];status="휴대폰 연결이 끊겼습니다"}
+    func disconnect(){deletedGeneration=UUID();pendingTrashPaths=[];photoTrashRunning=false;galleryDirty=false;transport.invalidate();sync.phase = .disconnected;sync.message="휴대폰 연결이 끊겼습니다 · 재연결을 기다립니다";sync.issueCode="disconnected";fetching=false;activeExport?.cancelExport();activeExport=nil;saving=false;previewWork?.cancel();librarySession=UUID();analysisStop=true;analysisRunning=false;unlocked=false;slideshow=false;editing=false;selection=[];downloaded=[:];generation=UUID();loading=false;selected=nil;original=nil;motion=nil;livePhoto=nil;items=[];queue=[];waiting=[];thumbnails=[:];status="휴대폰 연결이 끊겼습니다"}
     func export(){guard let original,let selected else{return};let panel=NSSavePanel();panel.nameFieldStringValue=selected.name;if panel.runModal() == .OK,let url=panel.url{do{if FileManager.default.fileExists(atPath:url.path){try FileManager.default.removeItem(at:url)};try FileManager.default.copyItem(at:original,to:url)}catch{status=error.localizedDescription}}}
 }
